@@ -1,0 +1,16 @@
+# Dados sensíveis e arquivos grandes (não versionar)
+db.txt
+*.db
+registros/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Sistema
+.DS_Store
+.env
+.env.*
