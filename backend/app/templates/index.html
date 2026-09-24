@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block content %}
+  {% if erro %}
+  <div class="alerta">{{ erro }}</div>
+  {% endif %}
+
+  <section class="painel hero">
+    <div class="hero-pe">
+      <div><span class="val">{{ n(stats.total) if stats else '—' }}</span><span class="lab">no banco</span></div>
+      <div><span class="val">{{ n(exibe_consultas) if stats else '—' }}</span><span class="lab">consultas</span></div>
+      <div><span class="val">{{ n(exibe_repetidos) if stats else '—' }}</span><span class="lab">repetidos</span></div>
+      <div><span class="val">{{ nota_ultimo }}</span><span class="lab">último registro</span></div>
+    </div>
+  </section>
+
+  <form method="post" class="painel">
+    <div class="p-head"><h2>Entrada</h2><p>PAN|validade|CVV ou hash SHA-256 — uma linha por cartão</p></div>
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label for="vulgo">Store (ou vulgo)</label>
+    <input type="text" name="vulgo" id="vulgo" maxlength="40" required value="{{ vulgo }}" placeholder="Ex: Minha Store">
+    <label for="numeros">Linhas</label>
+    <textarea name="numeros" id="numeros" rows="10" spellcheck="false" placeholder="4111111111111111|12|2028|123">{{ entrada }}</textarea>
+    <div class="acoes">
+      <button type="submit" class="btn-pri">Verificar números</button>
+    </div>
+  </form>
+
+  <section class="painel" id="resultados">
+    <div class="p-head">
+      <h2>Resultados</h2>
+      {% if resultado %}
+      <p>{{ n(registros|length) }} registro(s) encontrado(s)</p>
+      {% else %}
+      <p>Aguardando verificação</p>
+      {% endif %}
+    </div>
+    {% if registros %}
+    <div class="tab-scroll">
+      <table class="res-tab">
+        <thead>
+          <tr>
+            <th>Número</th><th>Status</th><th>Registro</th><th>Testado por</th><th>Consultas</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for reg in registros %}
+          {% set sit = situacoes[reg.situacao] %}
+          <tr data-situacao="{{ reg.situacao }}">
+            <td data-label="Número">
+              {% if reg.numero %}
+              <div class="cel-num">
+                <span class="idx">{{ reg.linha }}</span>
+                <code class="num">{% if reg.cc_full %}{{ reg.cc_full }}{% else %}{{ reg.numero }}{% endif %}</code>
+                {% if reg.cc_full or reg.numero %}
+                <button type="button" class="copiar" data-copia="{{ reg.cc_full or reg.numero }}" aria-label="Copiar">⧉</button>
+                {% endif %}
+              </div>
+              {% else %}
+              {% set titulo, nota = motivo_curto(reg.motivo) %}
+              <strong>{{ titulo }}</strong> <span>{{ nota }}</span>
+              {% endif %}
+            </td>
+            <td data-label="Status"><span class="selo {{ sit.tom }}">{{ sit.rotulo }}</span></td>
+            <td data-label="Registro">
+              {% if reg.registro %}<strong>{{ reg.registro }}</strong><br><span>{{ reg.registro_nota }}</span>{% else %}—{% endif %}
+            </td>
+            <td data-label="Testado por">
+              {% if reg.situacao in ['existente','repetido'] and reg.vulgo %}
+              {{ mask_vulgo(reg.vulgo) }}
+              {% elif reg.situacao == 'novo' %}Primeiro registro{% else %}—{% endif %}
+            </td>
+            <td data-label="Consultas" class="t-consultas">{% if reg.consultas is not none %}{{ reg.consultas }}×{% else %}—{% endif %}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% elif resultado is not none %}
+    <p class="vazio">Nenhuma linha processada.</p>
+    {% endif %}
+  </section>
+{% endblock %}

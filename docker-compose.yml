@@ -1,0 +1,74 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: anti-retest-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-antiretest}
+      POSTGRES_USER: ${POSTGRES_USER:-antiretest}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-antiretest}
+    volumes:
+      - anti-retest-pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-antiretest} -d ${POSTGRES_DB:-antiretest}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    image: anti-retest-api:latest
+    container_name: anti-retest-api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-antiretest}:${POSTGRES_PASSWORD:-antiretest}@postgres:5432/${POSTGRES_DB:-antiretest}
+      ANTIRETEST_LOG_DIR: /data/registros
+      SESSION_SECRET: ${SESSION_SECRET:-change-me-in-production}
+    volumes:
+      - anti-retest-data:/data
+    expose:
+      - "8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: anti-retest-nginx
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8082:80"
+    volumes:
+      - ./deploy/nginx-docker.conf:/etc/nginx/conf.d/default.conf:ro
+
+  migrate:
+    profiles: ["migrate"]
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    image: anti-retest-api:latest
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-antiretest}:${POSTGRES_PASSWORD:-antiretest}@postgres:5432/${POSTGRES_DB:-antiretest}
+      SQLITE_PATH: /backup/antiretest-20260923-172405.db
+      MIGRATE_BATCH: "10000"
+    volumes:
+      - ./backups:/backup
+    command: ["python", "/app/scripts/migrate_sqlite_to_postgres.py"]
+
+volumes:
+  anti-retest-pg:
+  anti-retest-data:

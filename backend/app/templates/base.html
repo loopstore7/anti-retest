@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>{% block title %}Anti Reteste V2{% endblock %}</title>
+<link rel="stylesheet" href="/static/app.css">
+{% block head %}{% endblock %}
+</head>
+<body>
+<header class="topo">
+  <div class="topo-in">
+    <h1><a href="/" class="marca-link">Anti Reteste <span>V2</span></a></h1>
+    <nav class="nav-abas" aria-label="Navegação principal">
+      <a href="/" class="aba{% if aba_ativa == 'verificacao' %} ativa{% endif %}">Verificação</a>
+      <a href="/documentacao" class="aba{% if aba_ativa == 'documentacao' %} ativa{% endif %}">Documentação API</a>
+    </nav>
+    <div class="chips">
+      <span class="chip ok">Operacional</span>
+      {% if stats %}
+      <span class="chip"><b>{{ n(stats.total) }}</b> registros</span>
+      {% endif %}
+    </div>
+  </div>
+</header>
+<main class="app">
+{% block content %}{% endblock %}
+</main>
+<script src="/static/app.js"></script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

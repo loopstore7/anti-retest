@@ -1,0 +1,148 @@
+{% extends "base.html" %}
+{% block title %}Documentação API — Anti Reteste V2{% endblock %}
+{% block content %}
+<section class="painel docs">
+  <div class="p-head">
+    <h2>Documentação da API</h2>
+    <p>Integre verificações anti-reteste em bots, painéis ou scripts.</p>
+  </div>
+  <div class="docs-corpo">
+
+    <div class="docs-links">
+      <a href="/docs" target="_blank" rel="noopener" class="btn-sec">Swagger UI</a>
+      <a href="/redoc" target="_blank" rel="noopener" class="btn-sec">ReDoc</a>
+      <a href="/openapi.json" target="_blank" rel="noopener" class="btn-sec">OpenAPI JSON</a>
+    </div>
+
+    <h3>Base URL</h3>
+    <pre class="code"><code>{{ base_url }}</code></pre>
+    <p class="nota">Use HTTPS em produção. Todas as respostas são JSON, salvo a interface web.</p>
+
+    <h3>Formato das linhas</h3>
+    <ul class="docs-lista">
+      <li><strong>Cartão completo:</strong> <code>PAN|MM|AAAA|CVV</code> — ex.: <code>4111111111111111|12|2028|123</code></li>
+      <li><strong>Hash:</strong> fingerprint SHA-256 (64 caracteres hex) para consulta direta</li>
+      <li>Separadores aceitos na linha: <code>| ; , : / \</code> e tab</li>
+      <li>Amex: 15 dígitos (34/37) com CVV de 4 dígitos</li>
+    </ul>
+
+    <h3>Endpoints</h3>
+
+    <article class="endpoint">
+      <div class="ep-topo"><span class="metodo get">GET</span><code>/health</code></div>
+      <p>Health check do serviço.</p>
+      <pre class="code"><code>{ "status": "ok" }</code></pre>
+    </article>
+
+    <article class="endpoint">
+      <div class="ep-topo"><span class="metodo get">GET</span><code>/api/stats</code></div>
+      <p>Estatísticas agregadas da base.</p>
+      <pre class="code"><code>{
+  "total": 11466068,
+  "attempts": 11473832,
+  "repetidos": 7764,
+  "retested": 5393,
+  "first_day": "2026-09-19",
+  "last_day": "2026-09-23"
+}</code></pre>
+    </article>
+
+    <article class="endpoint">
+      <div class="ep-topo"><span class="metodo post">POST</span><code>/api/check</code></div>
+      <p>Verifica um lote de linhas. Com <code>record: true</code> (padrão), grava novos e incrementa tentativas.</p>
+      <h4>Corpo (JSON)</h4>
+      <pre class="code"><code>{
+  "vulgo": "Minha Store",
+  "lines": [
+    "4111111111111111|12|2028|123",
+    "5502093421123456|03|2029|456"
+  ],
+  "record": true
+}</code></pre>
+      <h4>Resposta</h4>
+      <pre class="code"><code>{
+  "total": 2,
+  "new": 1,
+  "known": 1,
+  "duplicated": 0,
+  "invalid": 0,
+  "items": [
+    {
+      "line": 1,
+      "status": "new",
+      "masked": "411111******1111",
+      "cc_full": "4111111111111111|12|2028|123",
+      "fingerprint": "a1b2c3...",
+      "is_retest": false,
+      "attempts": 1,
+      "expiry": "12/2028",
+      "expired": false,
+      "vulgo": "Minha Store"
+    },
+    {
+      "line": 2,
+      "status": "known",
+      "masked": "550209******3456",
+      "cc_full": "5502093421123456|03|2029|456",
+      "is_retest": true,
+      "added_on": "2026-09-20",
+      "days_since_added": 3,
+      "attempts": 4,
+      "vulgo": "Out**"
+    }
+  ]
+}</code></pre>
+      <p class="nota"><strong>status</strong> por item: <code>new</code>, <code>known</code>, <code>duplicated</code>, <code>invalid</code>.</p>
+    </article>
+
+    <h3>Exemplos</h3>
+
+    <h4>cURL</h4>
+    <pre class="code"><code>curl -s -X POST {{ base_url }}/api/check \
+  -H "Content-Type: application/json" \
+  -d '{
+    "vulgo": "Bot Telegram",
+    "lines": ["4111111111111111|12|2028|123"],
+    "record": true
+  }'</code></pre>
+
+    <h4>Python</h4>
+    <pre class="code"><code>import requests
+
+resp = requests.post(
+    "{{ base_url }}/api/check",
+    json={
+        "vulgo": "Bot Telegram",
+        "lines": ["4111111111111111|12|2028|123"],
+        "record": True,
+    },
+    timeout=120,
+)
+resp.raise_for_status()
+data = resp.json()
+for item in data["items"]:
+    print(item["line"], item["status"], item.get("cc_full") or item.get("reason"))</code></pre>
+
+    <h4>JavaScript (fetch)</h4>
+    <pre class="code"><code>const resp = await fetch("{{ base_url }}/api/check", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    vulgo: "Painel Web",
+    lines: ["4111111111111111|12|2028|123"],
+    record: true,
+  }),
+});
+const data = await resp.json();
+console.log(data.items);</code></pre>
+
+    <h3>Erros HTTP</h3>
+    <ul class="docs-lista">
+      <li><code>400</code> — corpo inválido ou <code>vulgo</code> vazio</li>
+      <li><code>422</code> — JSON fora do schema esperado</li>
+      <li><code>500</code> — falha interna (banco indisponível, etc.)</li>
+    </ul>
+
+  </div>
+</section>
+{% endblock %}
