@@ -7,8 +7,14 @@ from pydantic import BaseModel, Field
 
 class CheckRequest(BaseModel):
     vulgo: str = Field(..., min_length=1, max_length=40, description="Store ou vulgo de quem consulta")
-    lines: list[str] = Field(..., min_length=1, description="Linhas PAN|MM|AAAA|CVV ou hash SHA-256")
+    lines: list[str] = Field(..., min_length=1, description="Linhas número|mês|ano|cvv ou hash SHA-256")
     record: bool = Field(True, description="Gravar novos e incrementar tentativas")
+
+
+class VerificarRequest(BaseModel):
+    csrf: str = ""
+    vulgo: str = Field("", max_length=40)
+    numeros: str = ""
 
 
 class CheckItem(BaseModel):

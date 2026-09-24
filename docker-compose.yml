@@ -69,6 +69,16 @@ services:
       - ./backups:/backup
     command: ["python", "/app/scripts/migrate_sqlite_to_postgres.py"]
 
+  migrate-fp:
+    profiles: ["migrate-fp"]
+    image: anti-retest-api:latest
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-antiretest}:${POSTGRES_PASSWORD:-antiretest}@postgres:5432/${POSTGRES_DB:-antiretest}
+    command: ["python", "/app/scripts/migrate_fp_cartao.py"]
+
 volumes:
   anti-retest-pg:
   anti-retest-data:

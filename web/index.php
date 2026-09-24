@@ -174,10 +174,15 @@ function ccFullFormatado(string $ccFull): string
         return e($ccFull);
     }
 
-    return numeroInteiro($partes[0])
-        . '<span class="nb-sep">|</span><span class="nb-dg">' . e($partes[1]) . '</span>'
-        . '<span class="nb-sep">|</span><span class="nb-dg">' . e($partes[2]) . '</span>'
-        . '<span class="nb-sep">|</span><span class="nb-dg">' . e($partes[3]) . '</span>';
+    $saida = numeroInteiro($partes[0]);
+    foreach (array_slice($partes, 1) as $parte) {
+        $saida .= '<span class="nb-sep">|</span>';
+        foreach (str_split($parte) as $caractere) {
+            $saida .= '<span class="nb-dg">' . e($caractere) . '</span>';
+        }
+    }
+
+    return $saida;
 }
 
 /** Assinatura do produto: losango externo + losango interno deslocado (repetição detectada). */
@@ -1455,7 +1460,7 @@ td.t-consultas { text-align: right; font-family: var(--mono); font-size: 13px; c
                     <div class="pop-div"></div>
                     <div class="aviso-item">
                         <i class="ponto" style="background: var(--t4); box-shadow: none;"></i>
-                        <div><strong>Cartão completo na base</strong><span>PAN|validade|CVV gravado em cada registro</span></div>
+                        <div><strong>Cartão completo na base</strong><span>número|mês|ano|cvv gravado em cada registro</span></div>
                     </div>
                 </div>
             </div>
@@ -1525,7 +1530,7 @@ td.t-consultas { text-align: right; font-family: var(--mono); font-size: 13px; c
                 </span>
                 <div>
                     <h2>Entrada</h2>
-                    <p>Informe a Store (ou vulgo) e cole linhas de cartão (PAN|validade|CVV) ou hash SHA-256 (64 caracteres).</p>
+                    <p>Informe a Store (ou vulgo) e cole linhas de cartão (número|mês|ano|cvv) ou hash SHA-256 (64 caracteres).</p>
                 </div>
                 <div class="p-head-fim">
                     <span class="micro" data-tip-fim data-tip="Números inéditos entram na base ao verificar">

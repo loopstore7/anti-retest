@@ -1,82 +1,198 @@
 {% extends "base.html" %}
 {% block content %}
   {% if erro %}
-  <div class="alerta">{{ erro }}</div>
+  <div class="alerta" role="alert">
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v5M12 16.2v.01"/></svg>
+    <div>{{ erro }}</div>
+  </div>
   {% endif %}
 
   <section class="painel hero">
+    <div class="hero-topo">
+      <span class="pilula">
+        <i class="ponto{% if stats is none %} off{% else %} vivo{% endif %}"></i>
+        {% if stats is none %}Sistema degradado{% else %}Sistema operacional{% endif %}
+      </span>
+      <span class="pilula">Base · <b data-stat="total">{% if stats %}{{ n(stats.total) }}{% else %}—{% endif %}</b> registros</span>
+    </div>
+
+    <div class="hero-corpo">
+      <span class="hero-sim">{{ marca_svg(26) }}</span>
+      <div class="hero-txt">
+        <div class="hero-marca">
+          <b>Anti Reteste</b>
+          <span>V2</span>
+        </div>
+        <h1>Verificação de números</h1>
+        <p>Consulte números em lote e identifique registros já existentes na base.</p>
+      </div>
+    </div>
+
     <div class="hero-pe">
-      <div><span class="val">{{ n(stats.total) if stats else '—' }}</span><span class="lab">no banco</span></div>
-      <div><span class="val">{{ n(exibe_consultas) if stats else '—' }}</span><span class="lab">consultas</span></div>
-      <div><span class="val">{{ n(exibe_repetidos) if stats else '—' }}</span><span class="lab">repetidos</span></div>
-      <div><span class="val">{{ nota_ultimo }}</span><span class="lab">último registro</span></div>
+      <div class="hp">
+        <span class="hp-val" data-stat="total">{% if stats %}{{ n(stats.total) }}{% else %}—{% endif %}</span>
+        <span class="hp-lab">no banco</span>
+      </div>
+      <div class="hp">
+        <span class="hp-val" data-stat="consultas">{% if stats %}{{ n(exibe_consultas) }}{% else %}—{% endif %}</span>
+        <span class="hp-lab">consultas</span>
+      </div>
+      <div class="hp">
+        <span class="hp-val" data-stat="repetidos">{% if stats %}{{ n(exibe_repetidos) }}{% else %}—{% endif %}</span>
+        <span class="hp-lab">repetidos</span>
+      </div>
+      <div class="hp">
+        <span class="hp-val" data-stat="ultimo">{% if stats and stats.last_day %}{{ data_curta(stats.last_day) }}{% else %}—{% endif %}</span>
+        <span class="hp-lab">último registro · <span data-stat="ultimo_nota">{{ nota_ultimo }}</span></span>
+      </div>
     </div>
   </section>
 
-  <form method="post" class="painel">
-    <div class="p-head"><h2>Entrada</h2><p>PAN|validade|CVV ou hash SHA-256 — uma linha por cartão</p></div>
-    <input type="hidden" name="csrf" value="{{ csrf }}">
-    <label for="vulgo">Store (ou vulgo)</label>
-    <input type="text" name="vulgo" id="vulgo" maxlength="40" required value="{{ vulgo }}" placeholder="Ex: Minha Store">
-    <label for="numeros">Linhas</label>
-    <textarea name="numeros" id="numeros" rows="10" spellcheck="false" placeholder="4111111111111111|12|2028|123">{{ entrada }}</textarea>
-    <div class="acoes">
-      <button type="submit" class="btn-pri">Verificar números</button>
-    </div>
-  </form>
+  <div class="colunas">
+    <form method="post" id="form" class="painel">
+      <div class="p-head">
+        <span class="p-head-ico">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4.5H6.5a2.5 2.5 0 0 0-2.5 2.5v10a2.5 2.5 0 0 0 2.5 2.5H9M15 4.5h2.5A2.5 2.5 0 0 1 20 7v10a2.5 2.5 0 0 1-2.5 2.5H15"/><path d="M12 8.5v7M8.5 12h7"/></svg>
+        </span>
+        <div>
+          <h2>Entrada</h2>
+          <p>Informe a Store (ou vulgo) e cole linhas de cartão (número|mês|ano|cvv) ou hash SHA-256 (64 caracteres).</p>
+        </div>
+        <div class="p-head-fim">
+          <span class="micro" data-tip-fim data-tip="Números inéditos entram na base ao verificar">
+            <i class="ponto vivo"></i> Salvamento automático
+          </span>
+        </div>
+      </div>
+      <div class="p-div"></div>
 
-  <section class="painel" id="resultados">
+      <div class="ed-wrap" style="padding-top:16px">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <div class="vulgo-campo">
+          <label for="vulgo">Store (ou vulgo)</label>
+          <input type="text" name="vulgo" id="vulgo" maxlength="40" autocomplete="nickname"
+                 required autofocus placeholder="Ex: BOT do João, Snorlax"
+                 value="{{ vulgo }}">
+        </div>
+        <div class="editor" id="editor">
+          <div class="ed-bar">
+            <span class="ed-rot"><i class="ed-tick"></i> Entrada bruta</span>
+            <span class="ed-meta">TXT · UTF-8 · AUTO</span>
+          </div>
+          <div class="ed-corpo">
+            <div class="linha-ativa" id="linhaAtiva"></div>
+            <div class="gutter" id="gutter" aria-hidden="true"><span>01</span><span>02</span><span>03</span></div>
+            <div class="campo">
+              <pre class="realce" id="realce" aria-hidden="true"></pre>
+              <textarea name="numeros" id="numeros" wrap="off" spellcheck="false" autocomplete="off"
+                placeholder="4111111111111111|12|2028|123&#10;5502093421123456|03|29|456&#10;371449635398431|07|2030|1234">{{ entrada }}</textarea>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="ed-pe">
+        <div class="medidores">
+          <span class="med"><b id="m-linhas">0</b> linhas</span>
+          <i class="med-pt"></i>
+          <span class="med"><b id="m-validos">0</b> válidos</span>
+          <i class="med-pt"></i>
+          <span class="med"><b id="m-invalidos">0</b> inválidos</span>
+        </div>
+        <div class="pe-fim">
+          <button type="button" class="btn btn-gh" id="limpar">Limpar</button>
+          <button type="submit" class="btn btn-pri" id="enviar" title="Ctrl + Enter">
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M2.8 8.6l3.1 3.1 7.3-7.4"/></svg>
+            <span>Verificar números</span>
+            <svg class="seta" width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 8h10M9 4.5L12.5 8 9 11.5"/></svg>
+          </button>
+        </div>
+      </div>
+    </form>
+
+    <aside class="painel lateral">
+      <div class="p-head">
+        <span class="p-head-ico">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 12h4l2.5-6 4 12 2.5-6h4"/></svg>
+        </span>
+        <div><h2>Status da sessão</h2></div>
+      </div>
+      <div class="lt-status">
+        <i class="ponto{% if stats is none %} off{% else %} vivo{% endif %}"></i>
+        {% if stats is none %}Sistema degradado{% else %}Sistema operacional{% endif %}
+      </div>
+
+      <div class="lt-bloco">
+        <div class="micro">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><ellipse cx="12" cy="5.5" rx="7.5" ry="3"/><path d="M4.5 5.5v13c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3v-13M4.5 12c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3"/></svg>
+          Base de dados
+        </div>
+        <span class="lt-val" data-stat="total">{% if stats %}{{ n(stats.total) }}{% else %}—{% endif %}</span>
+        <span class="lt-sub">registros disponíveis</span>
+      </div>
+
+      <div class="lt-bloco">
+        <div class="micro">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M4 6.5h16M4 12h11M4 17.5h7"/></svg>
+          Consulta atual
+        </div>
+        <span class="lt-val"><span id="s-linhas">0</span> <span class="lt-sub" style="display:inline;margin:0">linhas</span></span>
+        <div class="barra" data-tip="Proporção de linhas válidas no lote">
+          <i class="b-ok" id="b-ok"></i>
+          <i class="b-av" id="b-av"></i>
+        </div>
+      </div>
+
+      <div class="lt-par">
+        <div class="lt-cel ok">
+          <div class="micro">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5l5 5 11-11"/></svg>
+            Válidos
+          </div>
+          <span class="lt-val" id="s-validos">0</span>
+        </div>
+        <div class="lt-cel av">
+          <div class="micro">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 4.5v9M12 18v.01"/></svg>
+            Inválidos
+          </div>
+          <span class="lt-val" id="s-invalidos">0</span>
+        </div>
+      </div>
+
+      <div class="lt-pe">
+        <i class="ponto{% if stats is none %} off{% endif %}"></i>
+        <div class="lt-pe-txt">
+          <strong>{% if stats is none %}Base indisponível{% else %}Base sincronizada{% endif %}</strong>
+          <span>Atualizada agora · {{ agora_hora }} UTC</span>
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <section class="painel" id="pn-res">
     <div class="p-head">
-      <h2>Resultados</h2>
-      {% if resultado %}
-      <p>{{ n(registros|length) }} registro(s) encontrado(s)</p>
-      {% else %}
-      <p>Aguardando verificação</p>
-      {% endif %}
+      <span class="p-head-ico">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6.5h16M4 12h16M4 17.5h16M9 3.5v17"/></svg>
+      </span>
+      <div>
+        <h2>Resultados</h2>
+        <p id="res-sub">Aguardando verificação</p>
+      </div>
+      <div class="p-head-fim" id="res-filtros" hidden>
+        <div class="seg" role="group" aria-label="Filtrar resultados"></div>
+      </div>
     </div>
-    {% if registros %}
-    <div class="tab-scroll">
-      <table class="res-tab">
-        <thead>
-          <tr>
-            <th>Número</th><th>Status</th><th>Registro</th><th>Testado por</th><th>Consultas</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for reg in registros %}
-          {% set sit = situacoes[reg.situacao] %}
-          <tr data-situacao="{{ reg.situacao }}">
-            <td data-label="Número">
-              {% if reg.numero %}
-              <div class="cel-num">
-                <span class="idx">{{ reg.linha }}</span>
-                <code class="num">{% if reg.cc_full %}{{ reg.cc_full }}{% else %}{{ reg.numero }}{% endif %}</code>
-                {% if reg.cc_full or reg.numero %}
-                <button type="button" class="copiar" data-copia="{{ reg.cc_full or reg.numero }}" aria-label="Copiar">⧉</button>
-                {% endif %}
-              </div>
-              {% else %}
-              {% set titulo, nota = motivo_curto(reg.motivo) %}
-              <strong>{{ titulo }}</strong> <span>{{ nota }}</span>
-              {% endif %}
-            </td>
-            <td data-label="Status"><span class="selo {{ sit.tom }}">{{ sit.rotulo }}</span></td>
-            <td data-label="Registro">
-              {% if reg.registro %}<strong>{{ reg.registro }}</strong><br><span>{{ reg.registro_nota }}</span>{% else %}—{% endif %}
-            </td>
-            <td data-label="Testado por">
-              {% if reg.situacao in ['existente','repetido'] and reg.vulgo %}
-              {{ mask_vulgo(reg.vulgo) }}
-              {% elif reg.situacao == 'novo' %}Primeiro registro{% else %}—{% endif %}
-            </td>
-            <td data-label="Consultas" class="t-consultas">{% if reg.consultas is not none %}{{ reg.consultas }}×{% else %}—{% endif %}</td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
+
+    <div id="res-corpo">
+      <div class="vazio">
+        <span class="vazio-sim">{{ marca_svg(19) }}</span>
+        <h3>Nenhuma consulta realizada</h3>
+        <p>Os resultados da verificação aparecerão aqui.</p>
+      </div>
     </div>
-    {% elif resultado is not none %}
-    <p class="vazio">Nenhuma linha processada.</p>
-    {% endif %}
   </section>
+  {% if payload %}
+  <script type="application/json" id="dados-resultado">{{ payload|tojson }}</script>
+  {% endif %}
 {% endblock %}

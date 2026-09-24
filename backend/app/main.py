@@ -10,27 +10,22 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, Form, HTTPException, Request
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from markupsafe import Markup
 from starlette.middleware.sessions import SessionMiddleware
 
 from antiretest.core import mask_vulgo, sanitize_vulgo
 from antiretest.engine_pg import AntiRetestPg
 
-from .schemas import CheckItem, CheckRequest, CheckResponse, StatsResponse
+from .schemas import CheckItem, CheckRequest, CheckResponse, StatsResponse, VerificarRequest
 
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 STATIC_DIR = Path(__file__).parent / "static"
 
 engine: AntiRetestPg | None = None
-
-SITUACOES = {
-    "novo": {"rotulo": "Novo", "tom": "ok"},
-    "existente": {"rotulo": "Existente", "tom": "ambar"},
-    "repetido": {"rotulo": "Repetido", "tom": "indigo"},
-    "invalido": {"rotulo": "Inválido", "tom": "erro"},
-}
 
 MESES = ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"]
 
@@ -60,6 +55,85 @@ def motivo_curto(motivo: str) -> tuple[str, str]:
     return "Linha inválida", "Formato não reconhecido"
 
 
+def marca_svg(tamanho: int) -> Markup:
+    return Markup(
+        f'<svg class="marca-sim" width="{tamanho}" height="{tamanho}" viewBox="0 0 20 20"'
+        ' fill="none" aria-hidden="true">'
+        '<rect x="3.2" y="3.2" width="13.6" height="13.6" rx="3" transform="rotate(45 10 10)"'
+        ' stroke="currentColor" stroke-width="1.4" opacity=".55"/>'
+        '<rect x="6.8" y="6.8" width="6.4" height="6.4" rx="1.6" transform="rotate(45 10 10)"'
+        ' fill="currentColor"/>'
+        "</svg>"
+    )
+
+
+def vulgo_testado_por(vulgo: str | None, situacao: str) -> str | None:
+    if situacao not in ("existente", "repetido"):
+        return None
+    mascarado = mask_vulgo(vulgo or "")
+    return mascarado or None
+
+
+def nota_ultimo_registro(stats: dict[str, Any] | None, agora: datetime) -> str:
+    if not stats or not stats.get("last_day"):
+        return "—"
+    try:
+        ultimo = datetime.fromisoformat(str(stats["last_day"])[:10]).replace(tzinfo=timezone.utc)
+    except ValueError:
+        return "—"
+    dias = (agora.date() - ultimo.date()).days
+    if dias == 0:
+        return "hoje"
+    return f"há {n(dias)} dias"
+
+
+def build_stats_payload(stats: dict[str, Any] | None, agora: datetime) -> dict[str, Any] | None:
+    if not stats:
+        return None
+    return {
+        "total": int(stats["total"]),
+        "consultas": int(stats["attempts"]),
+        "repetidos": int(stats["repetidos"]),
+        "ultimo": data_curta(stats.get("last_day")),
+        "ultimo_nota": nota_ultimo_registro(stats, agora),
+    }
+
+
+def build_payload(resultado: dict[str, Any], agora: datetime) -> dict[str, Any]:
+    """Resultado enxuto para a página montar a tabela no navegador."""
+    itens: list[dict[str, Any]] = []
+    for reg in build_registros(resultado):
+        item: dict[str, Any] = {"linha": reg["linha"], "situacao": reg["situacao"]}
+        if reg["numero"]:
+            cc_full = (reg.get("cc_full") or "").strip()
+            item["numero"] = cc_full or reg["numero"]
+            if cc_full:
+                item["completo"] = True
+        else:
+            item["motivo"] = motivo_curto(reg["motivo"] or "")
+            item["detalhe"] = reg["motivo"]
+        if reg["registro"]:
+            item["registro"] = reg["registro"]
+            item["nota"] = reg["registro_nota"]
+        testado = vulgo_testado_por(reg["vulgo"], reg["situacao"])
+        if testado:
+            item["testado"] = testado
+        if reg["consultas"] is not None:
+            item["consultas"] = int(reg["consultas"])
+        itens.append(item)
+    return {
+        "itens": itens,
+        "resumo": {
+            "novo": len(resultado["new"]),
+            "existente": len(resultado["known"]),
+            "repetido": len(resultado["duplicated"]),
+            "invalido": len(resultado["invalid"]),
+        },
+        "agora_hora": agora.strftime("%H:%M"),
+        "agora_rotulo": f"{data_curta(agora.strftime('%Y-%m-%d'))}, {agora.strftime('%H:%M')} UTC",
+    }
+
+
 def build_registros(resultado: dict[str, Any]) -> list[dict[str, Any]]:
     registros: list[dict[str, Any]] = []
     for item in resultado["new"]:
@@ -82,7 +156,10 @@ def build_registros(resultado: dict[str, Any]) -> list[dict[str, Any]]:
             "motivo": None,
             "situacao": "existente",
             "registro": data_curta(item["added_on"]),
-            "registro_nota": "Registrado hoje" if dias == 0 else f"Registrado há {dias} dia(s)",
+            "registro_nota": (
+                "Registrado hoje" if dias == 0
+                else f"Registrado há {n(dias)} {'dia' if dias == 1 else 'dias'}"
+            ),
             "consultas": item["attempts"],
             "vulgo": item.get("vulgo", ""),
             "cc_full": item.get("cc_full", ""),
@@ -179,17 +256,38 @@ def _base_url(request: Request) -> str:
     return f"{proto}://{host}".rstrip("/")
 
 
+def static_url(nome: str) -> str:
+    """URL do arquivo estático com a versão embutida: mudou o arquivo, o navegador baixa de novo."""
+    try:
+        versao = int((STATIC_DIR / nome).stat().st_mtime)
+    except OSError:
+        return f"/static/{nome}"
+    return f"/static/{nome}?v={versao}"
+
+
 def _page_ctx(request: Request, **extra: Any) -> dict[str, Any]:
     ctx = {
         "aba_ativa": extra.pop("aba_ativa", "verificacao"),
         "base_url": _base_url(request),
+        "static_url": static_url,
         "n": n,
         "data_curta": data_curta,
-        "motivo_curto": motivo_curto,
-        "mask_vulgo": mask_vulgo,
+        "marca_svg": marca_svg,
+        "erro": extra.get("erro"),
+        "exibe_consultas": extra.get("exibe_consultas", 0),
+        "exibe_repetidos": extra.get("exibe_repetidos", 0),
     }
     ctx.update(extra)
     return ctx
+
+
+def _stats_extras(stats: dict[str, Any] | None, agora: datetime) -> dict[str, Any]:
+    return {
+        "exibe_consultas": int(stats["attempts"]) if stats else 0,
+        "exibe_repetidos": int(stats["repetidos"]) if stats else 0,
+        "nota_ultimo": nota_ultimo_registro(stats, agora),
+        "agora_hora": agora.strftime("%H:%M"),
+    }
 
 
 @asynccontextmanager
@@ -209,6 +307,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 app.add_middleware(SessionMiddleware, secret_key=os.environ.get("SESSION_SECRET", secrets.token_hex(32)))
+app.add_middleware(GZipMiddleware, minimum_size=1024)
 if STATIC_DIR.is_dir():
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
@@ -246,24 +345,8 @@ def api_check(body: CheckRequest) -> CheckResponse:
 
 
 @app.get("/documentacao", response_class=HTMLResponse)
-async def documentacao(request: Request) -> HTMLResponse:
+def documentacao(request: Request) -> HTMLResponse:
     assert engine is not None
-    try:
-        stats = engine.stats()
-    except Exception:
-        stats = None
-    return TEMPLATES.TemplateResponse(
-        request,
-        "documentacao.html",
-        _page_ctx(request, aba_ativa="documentacao", stats=stats),
-    )
-
-
-@app.get("/", response_class=HTMLResponse)
-async def index(request: Request) -> HTMLResponse:
-    assert engine is not None
-    if "csrf" not in request.session:
-        request.session["csrf"] = secrets.token_hex(16)
     try:
         stats = engine.stats()
         erro = None
@@ -273,50 +356,28 @@ async def index(request: Request) -> HTMLResponse:
     agora = datetime.now(timezone.utc)
     return TEMPLATES.TemplateResponse(
         request,
-        "index.html",
+        "documentacao.html",
         _page_ctx(
             request,
-            aba_ativa="verificacao",
-            csrf=request.session["csrf"],
+            aba_ativa="documentacao",
             stats=stats,
             erro=erro,
-            entrada="",
-            vulgo="",
-            registros=[],
-            resultado=None,
-            situacoes=SITUACOES,
-            agora_hora=agora.strftime("%H:%M"),
-            exibe_consultas=int(stats["attempts"]) if stats else 0,
-            exibe_repetidos=int(stats["repetidos"]) if stats else 0,
-            nota_ultimo=data_curta(stats["last_day"]) if stats and stats.get("last_day") else "—",
+            **_stats_extras(stats, agora),
         ),
     )
 
 
-@app.post("/", response_class=HTMLResponse)
-async def verify(
+def _render_index(
     request: Request,
-    csrf: str = Form(""),
-    vulgo: str = Form(""),
-    numeros: str = Form(""),
+    *,
+    entrada: str = "",
+    vulgo: str = "",
+    resultado: dict[str, Any] | None = None,
+    erro: str | None = None,
 ) -> HTMLResponse:
     assert engine is not None
-    if csrf != request.session.get("csrf"):
-        raise HTTPException(status_code=400, detail="Sessão expirada")
-    entrada = numeros
-    erro = None
-    resultado = None
-    registros: list[dict[str, Any]] = []
-    vulgo = vulgo.strip()
-    if not vulgo:
-        erro = "Informe a Store (ou vulgo) antes de verificar."
-    else:
-        linhas = [ln.strip() for ln in numeros.splitlines()]
-        try:
-            resultado = engine.check_many(linhas, record_new=True, vulgo=vulgo)
-            registros = build_registros(resultado)
-        except Exception as exc:
-            erro = f"Falha ao acessar o banco: {exc}"
+    if "csrf" not in request.session:
+        request.session["csrf"] = secrets.token_hex(16)
     try:
         stats = engine.stats()
     except Exception as exc:
@@ -329,17 +390,59 @@ async def verify(
         _page_ctx(
             request,
             aba_ativa="verificacao",
-            csrf=request.session.get("csrf", ""),
+            csrf=request.session["csrf"],
             stats=stats,
             erro=erro,
             entrada=entrada,
             vulgo=vulgo,
-            registros=registros,
-            resultado=resultado,
-            situacoes=SITUACOES,
-            agora_hora=agora.strftime("%H:%M"),
-            exibe_consultas=int(stats["attempts"]) if stats else 0,
-            exibe_repetidos=int(stats["repetidos"]) if stats else 0,
-            nota_ultimo=data_curta(stats["last_day"]) if stats and stats.get("last_day") else "—",
+            payload=build_payload(resultado, agora) if resultado is not None else None,
+            **_stats_extras(stats, agora),
         ),
     )
+
+
+@app.get("/", response_class=HTMLResponse)
+def index(request: Request) -> HTMLResponse:
+    return _render_index(request)
+
+
+@app.post("/", response_class=HTMLResponse)
+def verify(
+    request: Request,
+    csrf: str = Form(""),
+    vulgo: str = Form(""),
+    numeros: str = Form(""),
+) -> HTMLResponse:
+    assert engine is not None
+    if csrf != request.session.get("csrf"):
+        raise HTTPException(status_code=400, detail="Sessão expirada")
+    vulgo = vulgo.strip()
+    if not vulgo:
+        return _render_index(request, entrada=numeros, erro="Informe a Store (ou vulgo) antes de verificar.")
+    try:
+        resultado = engine.check_many(numeros.splitlines(), record_new=True, vulgo=vulgo)
+    except Exception as exc:
+        return _render_index(request, entrada=numeros, vulgo=vulgo, erro=f"Falha ao acessar o banco: {exc}")
+    return _render_index(request, entrada=numeros, vulgo=vulgo, resultado=resultado)
+
+
+@app.post("/verificar")
+def verificar(request: Request, body: VerificarRequest) -> dict[str, Any]:
+    assert engine is not None
+    if body.csrf != request.session.get("csrf"):
+        raise HTTPException(status_code=400, detail="Sessão expirada. Recarregue a página e envie novamente.")
+    vulgo = body.vulgo.strip()
+    if not vulgo:
+        raise HTTPException(status_code=400, detail="Informe a Store (ou vulgo) antes de verificar.")
+    try:
+        resultado = engine.check_many(body.numeros.splitlines(), record_new=True, vulgo=vulgo)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Falha ao acessar o banco: {exc}") from exc
+    agora = datetime.now(timezone.utc)
+    try:
+        stats = engine.stats()
+    except Exception:
+        stats = None
+    payload = build_payload(resultado, agora)
+    payload["stats"] = build_stats_payload(stats, agora)
+    return payload

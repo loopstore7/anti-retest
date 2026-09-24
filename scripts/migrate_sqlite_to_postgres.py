@@ -45,6 +45,8 @@ def main() -> int:
                 " ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
                 (row["key"], row["value"]),
             )
+        # O SQLite chaveia só pelo número; a API fica travada até rodar migrate_fp_cartao.py.
+        dst.execute("DELETE FROM meta WHERE key = 'fp_scheme'")
         dst.commit()
         print(f"meta: {len(meta_rows)} chave(s) migrada(s)")
 

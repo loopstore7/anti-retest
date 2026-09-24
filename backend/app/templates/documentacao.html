@@ -1,66 +1,182 @@
 {% extends "base.html" %}
 {% block title %}Documentação API — Anti Reteste V2{% endblock %}
+{% block body_class %}pg-docs{% endblock %}
 {% block content %}
-<section class="painel docs">
-  <div class="p-head">
-    <h2>Documentação da API</h2>
-    <p>Integre verificações anti-reteste em bots, painéis ou scripts.</p>
-  </div>
-  <div class="docs-corpo">
+{% set ico_copiar %}<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11.5" height="11.5" rx="2.5"/><path d="M5.5 15H5a1.5 1.5 0 0 1-1.5-1.5v-8A1.5 1.5 0 0 1 5 4h8A1.5 1.5 0 0 1 14.5 5.5V6"/></svg>{% endset %}
 
-    <div class="docs-links">
-      <a href="/docs" target="_blank" rel="noopener" class="btn-sec">Swagger UI</a>
-      <a href="/redoc" target="_blank" rel="noopener" class="btn-sec">ReDoc</a>
-      <a href="/openapi.json" target="_blank" rel="noopener" class="btn-sec">OpenAPI JSON</a>
+  <section class="painel hero">
+    <div class="hero-topo">
+      <span class="pilula">
+        <i class="ponto{% if stats is none %} off{% else %} vivo{% endif %}"></i>
+        {% if stats is none %}API degradada{% else %}API operacional{% endif %}
+      </span>
+      <span class="pilula">REST · <b>JSON</b></span>
     </div>
 
-    <h3>Base URL</h3>
-    <pre class="code"><code>{{ base_url }}</code></pre>
-    <p class="nota">Use HTTPS em produção. Todas as respostas são JSON, salvo a interface web.</p>
+    <div class="hero-corpo">
+      <span class="hero-sim">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M8.5 7 3.5 12l5 5M15.5 7l5 5-5 5M13.5 4.5l-3 15"/></svg>
+      </span>
+      <div class="hero-txt">
+        <div class="hero-marca">
+          <b>Anti Reteste</b>
+          <span>API</span>
+        </div>
+        <h1>Documentação da API</h1>
+        <p>Integre verificações anti-reteste em bots, painéis ou scripts com uma única chamada HTTP.</p>
+        <div class="hero-acoes">
+          <a href="/docs" target="_blank" rel="noopener" class="btn btn-pri">
+            <span>Abrir Swagger UI</span>
+            <svg class="seta" width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 8h10M9 4.5L12.5 8 9 11.5"/></svg>
+          </a>
+          <a href="/redoc" target="_blank" rel="noopener" class="btn btn-gh">ReDoc</a>
+          <a href="/openapi.json" target="_blank" rel="noopener" class="btn btn-gh">OpenAPI JSON</a>
+        </div>
+      </div>
+    </div>
 
-    <h3>Formato das linhas</h3>
-    <ul class="docs-lista">
-      <li><strong>Cartão completo:</strong> <code>PAN|MM|AAAA|CVV</code> — ex.: <code>4111111111111111|12|2028|123</code></li>
-      <li><strong>Hash:</strong> fingerprint SHA-256 (64 caracteres hex) para consulta direta</li>
-      <li>Separadores aceitos na linha: <code>| ; , : / \</code> e tab</li>
-      <li>Amex: 15 dígitos (34/37) com CVV de 4 dígitos</li>
-    </ul>
+    <div class="hero-pe">
+      <div class="hp">
+        <span class="hp-val">3</span>
+        <span class="hp-lab">endpoints</span>
+      </div>
+      <div class="hp">
+        <span class="hp-val">JSON</span>
+        <span class="hp-lab">entrada e saída</span>
+      </div>
+      <div class="hp">
+        <span class="hp-val">2.0.0</span>
+        <span class="hp-lab">versão da API</span>
+      </div>
+      <div class="hp">
+        <span class="hp-val">{% if stats %}{{ n(stats.total) }}{% else %}—{% endif %}</span>
+        <span class="hp-lab">registros na base</span>
+      </div>
+    </div>
+  </section>
 
-    <h3>Endpoints</h3>
+  <div class="docs-layout">
+    <nav class="painel docs-indice" aria-label="Índice da documentação">
+      <div class="micro">Nesta página</div>
+      <a href="#visao-geral" class="ativo">Visão geral</a>
+      <a href="#formatos">Formato das linhas</a>
+      <div class="indice-div"></div>
+      <div class="micro">Endpoints</div>
+      <a href="#check"><span class="metodo post">POST</span>/api/check</a>
+      <a href="#stats"><span class="metodo get">GET</span>/api/stats</a>
+      <a href="#health"><span class="metodo get">GET</span>/health</a>
+      <div class="indice-div"></div>
+      <a href="#exemplos">Exemplos</a>
+      <a href="#erros">Erros HTTP</a>
+    </nav>
 
-    <article class="endpoint">
-      <div class="ep-topo"><span class="metodo get">GET</span><code>/health</code></div>
-      <p>Health check do serviço.</p>
-      <pre class="code"><code>{ "status": "ok" }</code></pre>
-    </article>
+    <div class="docs-conteudo">
 
-    <article class="endpoint">
-      <div class="ep-topo"><span class="metodo get">GET</span><code>/api/stats</code></div>
-      <p>Estatísticas agregadas da base.</p>
-      <pre class="code"><code>{
-  "total": 11466068,
-  "attempts": 11473832,
-  "repetidos": 7764,
-  "retested": 5393,
-  "first_day": "2026-09-19",
-  "last_day": "2026-09-23"
-}</code></pre>
-    </article>
+      <section class="painel doc-sec" id="visao-geral">
+        <div class="p-head">
+          <span class="p-head-ico">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c2.3 2.4 3.5 5.2 3.5 8.5s-1.2 6.1-3.5 8.5c-2.3-2.4-3.5-5.2-3.5-8.5s1.2-6.1 3.5-8.5"/></svg>
+          </span>
+          <div>
+            <h2>Visão geral</h2>
+            <p>Todas as rotas respondem JSON. Use HTTPS em produção.</p>
+          </div>
+        </div>
+        <div class="doc-corpo">
+          <span class="doc-rot">Base URL</span>
+          <div class="url-base">
+            <span class="url-txt">{{ base_url }}</span>
+            <button type="button" class="code-copiar" data-copia="{{ base_url }}" aria-label="Copiar base URL">{{ ico_copiar }}</button>
+          </div>
+          <p>Envie um lote de linhas para <code>/api/check</code>: números inéditos entram na base e os já conhecidos voltam com a data do primeiro registro e o total de consultas.</p>
+        </div>
+      </section>
 
-    <article class="endpoint">
-      <div class="ep-topo"><span class="metodo post">POST</span><code>/api/check</code></div>
-      <p>Verifica um lote de linhas. Com <code>record: true</code> (padrão), grava novos e incrementa tentativas.</p>
-      <h4>Corpo (JSON)</h4>
-      <pre class="code"><code>{
+      <section class="painel doc-sec" id="formatos">
+        <div class="p-head">
+          <span class="p-head-ico">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6.5h16M4 12h11M4 17.5h7"/></svg>
+          </span>
+          <div>
+            <h2>Formato das linhas</h2>
+            <p>Cada item de <code>lines</code> representa um cartão.</p>
+          </div>
+        </div>
+        <div class="doc-corpo">
+          <div class="formatos">
+            <div class="formato">
+              <strong>Cartão completo</strong>
+              <code>4111111111111111|12|2028|123</code>
+              <span>número|mês|ano|cvv — ano com 2 ou 4 dígitos.</span>
+            </div>
+            <div class="formato">
+              <strong>Hash SHA-256</strong>
+              <code>9f86d081884c7d65…0f00a08</code>
+              <span>Fingerprint com 64 caracteres hexadecimais.</span>
+            </div>
+            <div class="formato">
+              <strong>Separadores aceitos</strong>
+              <code>|  ;  ,  :  /  \  tab</code>
+              <span>Espaços, pontos e hífens dentro do número são ignorados.</span>
+            </div>
+            <div class="formato">
+              <strong>American Express</strong>
+              <code>371449635398431|07|2030|1234</code>
+              <span>15 dígitos (34 ou 37) com CVV de 4 dígitos.</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="painel doc-sec ep" id="check">
+        <div class="ep-head">
+          <span class="metodo post">POST</span>
+          <code class="ep-path">/api/check</code>
+          <span class="ep-desc">Verifica um lote de linhas</span>
+        </div>
+        <div class="doc-corpo">
+          <p>Com <code>record: true</code> (padrão), grava os números novos e incrementa as tentativas dos já existentes. Use <code>record: false</code> para apenas consultar.</p>
+
+          <span class="doc-rot">Corpo da requisição</span>
+          <div class="campos-wrap">
+            <table class="campos">
+              <thead><tr><th>Campo</th><th>Tipo</th><th>Descrição</th></tr></thead>
+              <tbody>
+                <tr><td><code>vulgo</code><span class="obrig">obrigatório</span></td><td class="tipo">string · 1–40</td><td>Store ou vulgo de quem consulta.</td></tr>
+                <tr><td><code>lines</code><span class="obrig">obrigatório</span></td><td class="tipo">string[]</td><td>Linhas <code>número|mês|ano|cvv</code> ou hash SHA-256.</td></tr>
+                <tr><td><code>record</code><span class="opc">opcional</span></td><td class="tipo">boolean</td><td>Gravar novos e incrementar tentativas. Padrão <code>true</code>.</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="ep-par">
+            <div class="bloco">
+              <div class="bloco-bar">
+                <span class="ed-rot"><i class="ed-tick"></i> Requisição</span>
+                <div class="bloco-fim">
+                  <span class="bloco-lang">JSON</span>
+                  <button type="button" class="code-copiar" aria-label="Copiar">{{ ico_copiar }}</button>
+                </div>
+              </div>
+<pre data-lang="json">{
   "vulgo": "Minha Store",
   "lines": [
     "4111111111111111|12|2028|123",
-    "5502093421123456|03|2029|456"
+    "5555555555554444|03|2029|456"
   ],
   "record": true
-}</code></pre>
-      <h4>Resposta</h4>
-      <pre class="code"><code>{
+}</pre>
+            </div>
+
+            <div class="bloco">
+              <div class="bloco-bar">
+                <span class="ed-rot"><i class="ed-tick"></i> Resposta <span class="http-ok">200</span></span>
+                <div class="bloco-fim">
+                  <span class="bloco-lang">JSON</span>
+                  <button type="button" class="code-copiar" aria-label="Copiar">{{ ico_copiar }}</button>
+                </div>
+              </div>
+<pre data-lang="json">{
   "total": 2,
   "new": 1,
   "known": 1,
@@ -72,7 +188,6 @@
       "status": "new",
       "masked": "411111******1111",
       "cc_full": "4111111111111111|12|2028|123",
-      "fingerprint": "a1b2c3...",
       "is_retest": false,
       "attempts": 1,
       "expiry": "12/2028",
@@ -82,32 +197,120 @@
     {
       "line": 2,
       "status": "known",
-      "masked": "550209******3456",
-      "cc_full": "5502093421123456|03|2029|456",
+      "masked": "555555******4444",
       "is_retest": true,
       "added_on": "2026-09-20",
       "days_since_added": 3,
       "attempts": 4,
-      "vulgo": "Out**"
+      "vulgo": "Ou**"
     }
   ]
-}</code></pre>
-      <p class="nota"><strong>status</strong> por item: <code>new</code>, <code>known</code>, <code>duplicated</code>, <code>invalid</code>.</p>
-    </article>
+}</pre>
+            </div>
+          </div>
 
-    <h3>Exemplos</h3>
+          <span class="doc-rot">Status por item</span>
+          <div class="status-lista">
+            <div class="status-item"><span class="selo ok"><code>new</code></span><span>Número inédito — gravado agora.</span></div>
+            <div class="status-item"><span class="selo ambar"><code>known</code></span><span>Já existia na base; traz <code>added_on</code> e <code>attempts</code>.</span></div>
+            <div class="status-item"><span class="selo indigo"><code>duplicated</code></span><span>Repetido dentro do próprio lote; traz <code>first_line</code>.</span></div>
+            <div class="status-item"><span class="selo erro"><code>invalid</code></span><span>Linha rejeitada; o motivo vem em <code>reason</code>.</span></div>
+          </div>
+        </div>
+      </section>
 
-    <h4>cURL</h4>
-    <pre class="code"><code>curl -s -X POST {{ base_url }}/api/check \
+      <section class="painel doc-sec ep" id="stats">
+        <div class="ep-head">
+          <span class="metodo get">GET</span>
+          <code class="ep-path">/api/stats</code>
+          <span class="ep-desc">Estatísticas agregadas da base</span>
+        </div>
+        <div class="doc-corpo">
+          <div class="ep-par">
+            <div class="campos-wrap">
+              <table class="campos">
+                <thead><tr><th>Campo</th><th>Descrição</th></tr></thead>
+                <tbody>
+                  <tr><td><code>total</code></td><td>Registros na base.</td></tr>
+                  <tr><td><code>attempts</code></td><td>Soma de todas as consultas.</td></tr>
+                  <tr><td><code>repetidos</code></td><td>Consultas além da primeira (retestes).</td></tr>
+                  <tr><td><code>retested</code></td><td>Registros consultados mais de uma vez.</td></tr>
+                  <tr><td><code>first_day</code></td><td>Data do primeiro registro.</td></tr>
+                  <tr><td><code>last_day</code></td><td>Data do registro mais recente.</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="bloco">
+              <div class="bloco-bar">
+                <span class="ed-rot"><i class="ed-tick"></i> Resposta <span class="http-ok">200</span></span>
+                <div class="bloco-fim">
+                  <span class="bloco-lang">JSON</span>
+                  <button type="button" class="code-copiar" aria-label="Copiar">{{ ico_copiar }}</button>
+                </div>
+              </div>
+<pre data-lang="json">{
+  "total": 11466068,
+  "attempts": 11473832,
+  "repetidos": 7764,
+  "retested": 5393,
+  "first_day": "2026-09-19",
+  "last_day": "2026-09-23"
+}</pre>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="painel doc-sec ep" id="health">
+        <div class="ep-head">
+          <span class="metodo get">GET</span>
+          <code class="ep-path">/health</code>
+          <span class="ep-desc">Health check do serviço</span>
+        </div>
+        <div class="doc-corpo">
+          <div class="bloco">
+            <div class="bloco-bar">
+              <span class="ed-rot"><i class="ed-tick"></i> Resposta <span class="http-ok">200</span></span>
+              <div class="bloco-fim">
+                <span class="bloco-lang">JSON</span>
+                <button type="button" class="code-copiar" aria-label="Copiar">{{ ico_copiar }}</button>
+              </div>
+            </div>
+<pre data-lang="json">{ "status": "ok" }</pre>
+          </div>
+        </div>
+      </section>
+
+      <section class="painel doc-sec" id="exemplos">
+        <div class="p-head">
+          <span class="p-head-ico">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="m5 8 4 4-4 4M11.5 16.5h7.5"/></svg>
+          </span>
+          <div>
+            <h2>Exemplos</h2>
+            <p>Chamada a <code>/api/check</code> nas linguagens mais comuns.</p>
+          </div>
+        </div>
+        <div class="doc-corpo">
+          <div class="bloco">
+            <div class="bloco-bar">
+              <div class="seg bloco-abas" role="tablist" aria-label="Linguagem">
+                <button type="button" data-aba="curl" aria-pressed="true">cURL</button>
+                <button type="button" data-aba="python" aria-pressed="false">Python</button>
+                <button type="button" data-aba="js" aria-pressed="false">JavaScript</button>
+              </div>
+              <div class="bloco-fim">
+                <button type="button" class="code-copiar" aria-label="Copiar">{{ ico_copiar }}</button>
+              </div>
+            </div>
+<pre data-lang="bash" data-painel="curl">curl -s -X POST {{ base_url }}/api/check \
   -H "Content-Type: application/json" \
   -d '{
     "vulgo": "Bot Telegram",
     "lines": ["4111111111111111|12|2028|123"],
     "record": true
-  }'</code></pre>
-
-    <h4>Python</h4>
-    <pre class="code"><code>import requests
+  }'</pre>
+<pre data-lang="py" data-painel="python" hidden>import requests
 
 resp = requests.post(
     "{{ base_url }}/api/check",
@@ -119,12 +322,9 @@ resp = requests.post(
     timeout=120,
 )
 resp.raise_for_status()
-data = resp.json()
-for item in data["items"]:
-    print(item["line"], item["status"], item.get("cc_full") or item.get("reason"))</code></pre>
-
-    <h4>JavaScript (fetch)</h4>
-    <pre class="code"><code>const resp = await fetch("{{ base_url }}/api/check", {
+for item in resp.json()["items"]:
+    print(item["line"], item["status"], item.get("reason"))</pre>
+<pre data-lang="js" data-painel="js" hidden>const resp = await fetch("{{ base_url }}/api/check", {
   method: "POST",
   headers: { "Content-Type": "application/json" },
   body: JSON.stringify({
@@ -134,15 +334,31 @@ for item in data["items"]:
   }),
 });
 const data = await resp.json();
-console.log(data.items);</code></pre>
+console.log(data.items);</pre>
+          </div>
+        </div>
+      </section>
 
-    <h3>Erros HTTP</h3>
-    <ul class="docs-lista">
-      <li><code>400</code> — corpo inválido ou <code>vulgo</code> vazio</li>
-      <li><code>422</code> — JSON fora do schema esperado</li>
-      <li><code>500</code> — falha interna (banco indisponível, etc.)</li>
-    </ul>
+      <section class="painel doc-sec" id="erros">
+        <div class="p-head">
+          <span class="p-head-ico">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 8v5M12 16.2v.01"/></svg>
+          </span>
+          <div>
+            <h2>Erros HTTP</h2>
+            <p>Erros retornam <code>{ "detail": "..." }</code>.</p>
+          </div>
+        </div>
+        <div class="doc-corpo">
+          <div class="status-lista">
+            <div class="status-item"><span class="selo ambar"><code>400</code></span><strong>Requisição inválida</strong><span><code>vulgo</code> vazio ou <code>lines</code> sem linhas úteis.</span></div>
+            <div class="status-item"><span class="selo ambar"><code>422</code></span><strong>Schema incorreto</strong><span>JSON fora do formato esperado.</span></div>
+            <div class="status-item"><span class="selo erro"><code>500</code></span><strong>Falha interna</strong><span>Banco indisponível ou erro inesperado.</span></div>
+          </div>
+        </div>
+      </section>
 
+    </div>
   </div>
-</section>
 {% endblock %}
+{% block scripts %}<script src="{{ static_url('docs.js') }}"></script>{% endblock %}

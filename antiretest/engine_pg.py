@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import os
 import secrets
-from datetime import date, datetime, timezone
+import threading
+import time
+from datetime import datetime, timezone
 from typing import Any
 
 import psycopg
@@ -47,6 +49,12 @@ CREATE INDEX IF NOT EXISTS entries_last_seen_idx ON entries (last_seen_at DESC);
 """
 
 
+FETCH_CHUNK = 10_000
+FP_SCHEME = "cartao"
+# Recontar a tabela inteira é caro; entre recontagens os números andam por delta.
+STATS_TTL = float(os.environ.get("ANTIRETEST_STATS_TTL", "60"))
+
+
 def _now_utc() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -56,11 +64,6 @@ def _parse_ts(raw: str | datetime) -> datetime:
         return raw if raw.tzinfo else raw.replace(tzinfo=timezone.utc)
     dt = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
-
-
-def _is_expired(month: int, year: int, today: date | None = None) -> bool:
-    hoje = today or date.today()
-    return (year, month) < (hoje.year, hoje.month)
 
 
 def _row_to_check_dict(row: dict[str, Any], *, moment: datetime, record: bool) -> dict[str, Any]:
@@ -81,8 +84,14 @@ def _row_to_check_dict(row: dict[str, Any], *, moment: datetime, record: bool) -
         "expiry": "—",
         "expired": False,
         "vulgo": sanitize_vulgo(row.get("vulgo") or ""),
-        "cc_full": str(row.get("cc_full") or "").strip(),
+        # Quem consulta por hash não enviou validade/CVV; o guardado nunca sai daqui.
+        "cc_full": "",
     }
+
+
+def card_fingerprint(cc_full: str, key: bytes) -> str:
+    """Identidade do registro: o cartão inteiro (número|mês|ano|cvv), não só o número."""
+    return fingerprint(cc_full, key)
 
 
 class AntiRetestPg:
@@ -101,6 +110,7 @@ class AntiRetestPg:
             conn.execute(PG_SCHEMA)
             conn.commit()
         self._key = key or self._resolve_key()
+        self._check_fp_scheme()
         log_env = os.environ.get("ANTIRETEST_LOG_DIR", "")
         if log_env == "-":
             self._log = None
@@ -110,6 +120,31 @@ class AntiRetestPg:
             self._log = DailyLog(log_env)
         else:
             self._log = None
+        self._init_stats_cache()
+
+    def _init_stats_cache(self) -> None:
+        self._stats_lock = threading.Lock()
+        self._stats_cache: dict[str, Any] | None = None
+        self._stats_at = 0.0
+        self._stats_refreshing = False
+
+    def _check_fp_scheme(self) -> None:
+        """Base antiga (chave só pelo número) misturada com a nova duplicaria cartões."""
+        with self._pool.connection() as conn:
+            row = conn.execute("SELECT value FROM meta WHERE key = 'fp_scheme'").fetchone()
+            if row and row["value"] == FP_SCHEME:
+                return
+            if conn.execute("SELECT EXISTS (SELECT 1 FROM entries)").fetchone()["exists"]:
+                raise RuntimeError(
+                    "Base com fingerprints antigos (só o número do cartão). Rode uma vez:"
+                    " docker compose --profile migrate-fp run --rm migrate-fp"
+                )
+            conn.execute(
+                "INSERT INTO meta (key, value) VALUES ('fp_scheme', %s)"
+                " ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+                (FP_SCHEME,),
+            )
+            conn.commit()
 
     def close(self) -> None:
         if self._owns_pool:
@@ -133,6 +168,54 @@ class AntiRetestPg:
             return bytes.fromhex(row["value"])
 
     def stats(self) -> dict[str, Any]:
+        with self._stats_lock:
+            cache = self._stats_cache
+            vencido = time.monotonic() - self._stats_at > STATS_TTL
+            atualizar = cache is not None and vencido and not self._stats_refreshing
+            if atualizar:
+                self._stats_refreshing = True
+        if cache is None:
+            return self._refresh_stats()
+        if atualizar:
+            threading.Thread(target=self._refresh_stats, daemon=True).start()
+        return dict(cache)
+
+    def _refresh_stats(self) -> dict[str, Any]:
+        try:
+            fresh = self._query_stats()
+        finally:
+            with self._stats_lock:
+                self._stats_refreshing = False
+        with self._stats_lock:
+            self._stats_cache = fresh
+            self._stats_at = time.monotonic()
+        return dict(fresh)
+
+    def _apply_stats_delta(
+        self,
+        inserts: dict[str, dict[str, Any]],
+        bumps: dict[str, int],
+        rows: dict[str, dict[str, Any]],
+        moment: datetime,
+    ) -> None:
+        with self._stats_lock:
+            cache = self._stats_cache
+            if cache is None:
+                return
+            cache["total"] += len(inserts)
+            cache["attempts"] += sum(r["attempts"] for r in inserts.values())
+            cache["attempts"] += sum(bumps.values())
+            cache["repetidos"] = max(0, cache["attempts"] - cache["total"])
+            cache["retested"] += sum(1 for r in inserts.values() if r["attempts"] > 1)
+            cache["retested"] += sum(
+                1 for fp in bumps if fp in rows and int(rows[fp]["attempts"]) == 1
+            )
+            if inserts:
+                hoje = moment.date().isoformat()
+                cache["last_day"] = max(cache["last_day"] or hoje, hoje)
+                cache["first_day"] = cache["first_day"] or hoje
+
+    def _query_stats(self) -> dict[str, Any]:
         with self._pool.connection() as conn:
             row = conn.execute(
                 "SELECT COUNT(*) AS total, COALESCE(SUM(attempts), 0) AS attempts,"
@@ -199,7 +282,7 @@ class AntiRetestPg:
         expiry = entry.expiry
         expired = entry.is_expired(moment.astimezone().date())
         marcas = (MARK_EXPIRED,) if expired else ()
-        fp = fingerprint(digits, self._key)
+        fp = card_fingerprint(cc_full, self._key)
 
         with self._pool.connection() as conn:
             row = conn.execute("SELECT * FROM entries WHERE fingerprint = %s", (fp,)).fetchone()
@@ -246,15 +329,12 @@ class AntiRetestPg:
             vulgo_gravado = sanitize_vulgo(row.get("vulgo") or "")
             if record:
                 conn.execute(
-                    "UPDATE entries SET attempts = %s, last_seen_at = %s, cc_full = %s"
-                    " WHERE fingerprint = %s",
-                    (attempts, moment, cc_full, fp),
+                    "UPDATE entries SET attempts = %s, last_seen_at = %s WHERE fingerprint = %s",
+                    (attempts, moment, fp),
                 )
                 conn.commit()
                 if self._log:
                     self._log.append(raw_line or number, MARK_KNOWN, *marcas, now=moment)
-            else:
-                cc_full = str(row.get("cc_full") or "").strip() or cc_full
 
             return {
                 "masked": mask(digits),
@@ -271,28 +351,56 @@ class AntiRetestPg:
                 "cc_full": cc_full,
             }
 
-    def _bump_attempts(
-        self,
-        fp: str,
-        raw_line: str | None = None,
-        cc_full: str = "",
-    ) -> None:
-        moment = _now_utc()
+    def _fetch_rows(self, fps: set[str]) -> dict[str, dict[str, Any]]:
+        """Registros existentes para os fingerprints do lote, em poucas consultas."""
+        if not fps:
+            return {}
+        lista = sorted(fps)
+        rows: dict[str, dict[str, Any]] = {}
         with self._pool.connection() as conn:
-            if cc_full:
-                conn.execute(
-                    "UPDATE entries SET attempts = attempts + 1, last_seen_at = %s, cc_full = %s"
-                    " WHERE fingerprint = %s",
-                    (moment, cc_full, fp),
+            for i in range(0, len(lista), FETCH_CHUNK):
+                cursor = conn.execute(
+                    "SELECT fingerprint, bin, last4, added_at, attempts, pan_length, vulgo, cc_full"
+                    " FROM entries WHERE fingerprint = ANY(%s)",
+                    (lista[i : i + FETCH_CHUNK],),
                 )
-            else:
-                conn.execute(
-                    "UPDATE entries SET attempts = attempts + 1, last_seen_at = %s WHERE fingerprint = %s",
-                    (moment, fp),
-                )
+                for row in cursor:
+                    rows[row["fingerprint"]] = row
+        return rows
+
+    def _persist(
+        self,
+        inserts: dict[str, dict[str, Any]],
+        bumps: dict[str, int],
+        moment: datetime,
+    ) -> None:
+        """Grava o lote inteiro numa transação; ordem fixa evita deadlock entre lotes."""
+        with self._pool.connection() as conn:
+            with conn.cursor() as cur:
+                if inserts:
+                    cur.executemany(
+                        "INSERT INTO entries"
+                        " (fingerprint, bin, last4, added_at, added_on, last_seen_at,"
+                        " attempts, pan_length, vulgo, cc_full)"
+                        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
+                        " ON CONFLICT (fingerprint) DO UPDATE SET"
+                        " attempts = entries.attempts + EXCLUDED.attempts,"
+                        " last_seen_at = EXCLUDED.last_seen_at",
+                        [
+                            (
+                                fp, r["bin"], r["last4"], moment, moment.date(), moment,
+                                r["attempts"], r["pan_length"], r["vulgo"], r["cc_full"],
+                            )
+                            for fp, r in sorted(inserts.items())
+                        ],
+                    )
+                if bumps:
+                    cur.executemany(
+                        "UPDATE entries SET attempts = attempts + %s, last_seen_at = %s"
+                        " WHERE fingerprint = %s",
+                        [(n, moment, fp) for fp, n in sorted(bumps.items())],
+                    )
             conn.commit()
-        if self._log and raw_line:
-            self._log.append(raw_line, MARK_KNOWN, now=moment)
 
     def check_many(
         self,
@@ -301,22 +409,52 @@ class AntiRetestPg:
         record_new: bool = False,
         vulgo: str = "",
     ) -> dict[str, Any]:
-        result: dict[str, Any] = {"new": [], "known": [], "duplicated": [], "invalid": [], "total": 0}
-        seen: dict[str, dict[str, Any]] = {}
+        moment = _now_utc()
+        hoje = moment.astimezone().date()
         vulgo = sanitize_vulgo(vulgo)
+        result: dict[str, Any] = {"new": [], "known": [], "duplicated": [], "invalid": [], "total": 0}
 
+        parsed: list[tuple[int, str, str | None, Any]] = []
         for index, number in enumerate(numbers):
-            number = str(number).strip()
-            if not number:
+            raw = str(number).strip()
+            if not raw:
                 continue
-            line = index + 1
             result["total"] += 1
+            if is_fingerprint_line(raw):
+                parsed.append((index + 1, raw, raw.lower(), None))
+                continue
+            try:
+                entry = parse_entry(raw)
+            except InvalidNumberError as err:
+                parsed.append((index + 1, raw, None, str(err)))
+                continue
+            fp = card_fingerprint(format_cc_full_from_entry(entry), self._key)
+            parsed.append((index + 1, raw, fp, entry))
 
-            if is_fingerprint_line(number):
-                fp = number.strip().lower()
+        rows = self._fetch_rows({fp for _, _, fp, _ in parsed if fp})
+        inserts: dict[str, dict[str, Any]] = {}
+        bumps: dict[str, int] = {}
+        seen: dict[str, dict[str, Any]] = {}
+        log: list[tuple[str, tuple[str, ...]]] = []
+
+        def bump(fp: str) -> None:
+            if fp in inserts:
+                inserts[fp]["attempts"] += 1
+            else:
+                bumps[fp] = bumps.get(fp, 0) + 1
+
+        for line, raw, fp, dado in parsed:
+            if fp is None:
+                result["invalid"].append({"line": line, "reason": dado, "vulgo": None})
+                if record_new:
+                    log.append((raw, (MARK_INVALID,)))
+                continue
+
+            if dado is None:
                 if fp in seen:
                     if record_new:
-                        self._bump_attempts(fp, number)
+                        bump(fp)
+                        log.append((raw, (MARK_KNOWN,)))
                     result["duplicated"].append({
                         "line": line,
                         "masked": seen[fp].get("masked", "hash"),
@@ -325,62 +463,108 @@ class AntiRetestPg:
                         "cc_full": seen[fp].get("cc_full", ""),
                     })
                     continue
-                try:
-                    entry = self.check_by_fingerprint(number, record=record_new, raw_line=number)
-                    entry["line"] = line
-                except InvalidNumberError as err:
-                    result["invalid"].append({"line": line, "reason": str(err), "vulgo": None})
-                    if record_new and self._log:
-                        self._log.append(number, MARK_INVALID)
+                row = rows.get(fp)
+                if row is None:
+                    result["invalid"].append(
+                        {"line": line, "reason": "Hash não encontrado na base.", "vulgo": None}
+                    )
+                    if record_new:
+                        log.append((raw, (MARK_INVALID,)))
                     continue
+                entry_out = _row_to_check_dict(row, moment=moment, record=record_new)
+                entry_out["line"] = line
+                if record_new:
+                    bump(fp)
+                    log.append((raw, (MARK_KNOWN,)))
                 seen[fp] = {
                     "line": line,
-                    "masked": entry.get("masked", ""),
-                    "vulgo": entry.get("vulgo", ""),
-                    "cc_full": entry.get("cc_full", ""),
+                    "masked": entry_out["masked"],
+                    "vulgo": entry_out["vulgo"],
+                    "cc_full": entry_out["cc_full"],
                     "is_retest": True,
                 }
-                result["known"].append(entry)
+                result["known"].append(entry_out)
                 continue
 
-            try:
-                entry_parsed = parse_entry(number)
-            except InvalidNumberError as err:
-                result["invalid"].append({"line": line, "reason": str(err), "vulgo": None})
-                if record_new and self._log:
-                    self._log.append(number, MARK_INVALID)
-                continue
+            entry = dado
+            cc_full = format_cc_full_from_entry(entry)
+            expired = entry.is_expired(hoje)
+            marcas = (MARK_EXPIRED,) if expired else ()
 
-            fp = fingerprint(entry_parsed.pan, self._key)
-            cc_full = format_cc_full_from_entry(entry_parsed)
             if fp in seen:
-                if record_new and seen[fp].get("is_retest"):
-                    self._bump_attempts(fp, number, cc_full)
-                elif record_new and self._log:
-                    marcas = [MARK_KNOWN]
-                    if _is_expired(entry_parsed.month, entry_parsed.year):
-                        marcas.append(MARK_EXPIRED)
-                    self._log.append(number, *marcas)
+                if record_new:
+                    if seen[fp]["is_retest"]:
+                        bump(fp)
+                        log.append((raw, (MARK_KNOWN,)))
+                    else:
+                        log.append((raw, (MARK_KNOWN, *marcas)))
                 result["duplicated"].append({
                     "line": line,
-                    "masked": mask(entry_parsed.pan),
+                    "masked": mask(entry.pan),
                     "first_line": seen[fp]["line"],
                     "vulgo": seen[fp].get("vulgo", ""),
-                    "cc_full": seen[fp].get("cc_full", cc_full),
+                    "cc_full": cc_full,
                 })
                 continue
 
-            entry = self.check(number, record=record_new, raw_line=number, vulgo=vulgo)
-            entry["line"] = line
+            row = rows.get(fp)
+            if row is None:
+                if record_new:
+                    inserts[fp] = {
+                        "bin": entry.pan[:6],
+                        "last4": entry.pan[-4:],
+                        "attempts": 1,
+                        "pan_length": len(entry.pan),
+                        "vulgo": vulgo,
+                        "cc_full": cc_full,
+                    }
+                    log.append((raw, (MARK_NEW, *marcas)))
+                entry_out = {
+                    "masked": mask(entry.pan),
+                    "fingerprint": fp,
+                    "is_retest": False,
+                    "status": "new",
+                    "recorded": record_new,
+                    "added_on": moment.date().isoformat(),
+                    "days_since_added": 0,
+                    "attempts": 1,
+                    "expiry": entry.expiry,
+                    "expired": expired,
+                    "vulgo": vulgo,
+                    "cc_full": cc_full,
+                }
+                result["new"].append(entry_out)
+            else:
+                added_at = _parse_ts(row["added_at"])
+                if record_new:
+                    bump(fp)
+                    log.append((raw, (MARK_KNOWN, *marcas)))
+                entry_out = {
+                    "masked": mask(entry.pan),
+                    "fingerprint": fp,
+                    "is_retest": True,
+                    "status": "known",
+                    "recorded": False,
+                    "added_on": added_at.date().isoformat(),
+                    "days_since_added": (moment.date() - added_at.date()).days,
+                    "attempts": int(row["attempts"]) + (1 if record_new else 0),
+                    "expiry": entry.expiry,
+                    "expired": expired,
+                    "vulgo": sanitize_vulgo(row.get("vulgo") or ""),
+                    "cc_full": cc_full,
+                }
+                result["known"].append(entry_out)
+            entry_out["line"] = line
             seen[fp] = {
                 "line": line,
-                "vulgo": entry.get("vulgo", ""),
-                "cc_full": entry.get("cc_full", cc_full),
-                "is_retest": entry.get("is_retest", False),
+                "vulgo": entry_out["vulgo"],
+                "cc_full": entry_out["cc_full"],
+                "is_retest": entry_out["is_retest"],
             }
-            if entry["is_retest"]:
-                result["known"].append(entry)
-            else:
-                result["new"].append(entry)
 
+        if record_new and (inserts or bumps):
+            self._persist(inserts, bumps, moment)
+            self._apply_stats_delta(inserts, bumps, rows, moment)
+        if self._log and log:
+            self._log.append_many(log, now=moment)
         return result
