@@ -17,6 +17,11 @@ class VerificarRequest(BaseModel):
     numeros: str = ""
 
 
+class BinRequest(BaseModel):
+    csrf: str = ""
+    linhas: str = ""
+
+
 class CheckItem(BaseModel):
     line: int
     status: str

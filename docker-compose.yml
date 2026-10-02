@@ -29,9 +29,9 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER:-antiretest}:${POSTGRES_PASSWORD:-antiretest}@postgres:5432/${POSTGRES_DB:-antiretest}
       ANTIRETEST_LOG_DIR: /data/registros
       SESSION_SECRET: ${SESSION_SECRET:-change-me-in-production}
-      CX2_ADMIN_USER: ${CX2_ADMIN_USER:-}
-      CX2_ADMIN_PASSWORD_HASH: ${CX2_ADMIN_PASSWORD_HASH:-}
-      ADMIN_HOST: ${ADMIN_HOST:-}
+      AUDIT_WEBHOOK_URL: ${AUDIT_WEBHOOK_URL:-}
+      BIN_API_URL: ${BIN_API_URL:-}
+      BIN_API_KEY: ${BIN_API_KEY:-}
     volumes:
       - anti-retest-data:/data
     expose:

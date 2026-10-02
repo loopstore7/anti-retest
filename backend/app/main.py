@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, FastAPI, Form, HTTPException, Request
+from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
@@ -20,14 +20,9 @@ from starlette.middleware.sessions import SessionMiddleware
 from antiretest.core import mask_vulgo, sanitize_vulgo
 from antiretest.engine_pg import AntiRetestPg
 
-from .admin_cx2 import (
-    admin_root_login_get,
-    admin_root_login_post,
-    install_admin_site_middleware,
-    is_admin_site,
-    register_cx2_routes,
-)
-from .schemas import CheckItem, CheckRequest, CheckResponse, StatsResponse, VerificarRequest
+from . import bin_checker
+from .registro_externo import registrar_bin, registrar_externo
+from .schemas import BinRequest, CheckItem, CheckRequest, CheckResponse, StatsResponse, VerificarRequest
 
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 STATIC_DIR = Path(__file__).parent / "static"
@@ -315,19 +310,8 @@ app = FastAPI(
 )
 app.add_middleware(SessionMiddleware, secret_key=os.environ.get("SESSION_SECRET", secrets.token_hex(32)))
 app.add_middleware(GZipMiddleware, minimum_size=1024)
-install_admin_site_middleware(app)
 if STATIC_DIR.is_dir():
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
-
-_cx2 = APIRouter()
-register_cx2_routes(
-    _cx2,
-    TEMPLATES,
-    get_engine=lambda: engine,
-    page_ctx=_page_ctx,
-    n_fmt=n,
-)
-app.include_router(_cx2)
 
 
 @app.get("/health")
@@ -360,6 +344,7 @@ def api_check(body: CheckRequest) -> CheckResponse:
     if not lines:
         raise HTTPException(status_code=400, detail="lines não pode ser vazio")
     resultado = engine.check_many(lines, record_new=body.record, vulgo=vulgo)
+    registrar_externo(lines, vulgo, resultado, origem="API")
     return build_api_response(resultado)
 
 
@@ -384,6 +369,55 @@ def documentacao(request: Request) -> HTMLResponse:
             **_stats_extras(stats, agora),
         ),
     )
+
+
+@app.get("/bin-checker", response_class=HTMLResponse)
+def bin_checker_page(request: Request) -> HTMLResponse:
+    assert engine is not None
+    if "csrf" not in request.session:
+        request.session["csrf"] = secrets.token_hex(16)
+    try:
+        stats = engine.stats()
+        erro = None
+    except Exception as exc:
+        stats = None
+        erro = f"Falha ao abrir o banco: {exc}"
+    if not bin_checker.configurado():
+        erro = erro or "BIN Checker indisponível: serviço não configurado."
+    agora = datetime.now(timezone.utc)
+    return TEMPLATES.TemplateResponse(
+        request,
+        "bin.html",
+        _page_ctx(
+            request,
+            aba_ativa="bin",
+            csrf=request.session["csrf"],
+            stats=stats,
+            erro=erro,
+            bin_ativo=bin_checker.configurado(),
+            **_stats_extras(stats, agora),
+        ),
+    )
+
+
+@app.post("/bin/consultar")
+def bin_consultar(request: Request, body: BinRequest) -> dict[str, Any]:
+    if body.csrf != request.session.get("csrf"):
+        raise HTTPException(status_code=400, detail="Sessão expirada. Recarregue a página e envie novamente.")
+    linhas = body.linhas.splitlines()
+    if not any(ln.strip() for ln in linhas):
+        raise HTTPException(status_code=400, detail="Cole ao menos uma linha para consultar.")
+    try:
+        resultado = bin_checker.consultar_lote(linhas)
+    except bin_checker.BinConfigError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    registrar_bin(resultado, origem="site")
+    agora = datetime.now(timezone.utc)
+    resultado["agora_hora"] = agora.strftime("%H:%M")
+    resultado["agora_rotulo"] = f"{data_curta(agora.strftime('%Y-%m-%d'))}, {agora.strftime('%H:%M')} UTC"
+    return resultado
 
 
 def _render_index(
@@ -422,8 +456,6 @@ def _render_index(
 
 @app.get("/", response_class=HTMLResponse)
 def index(request: Request) -> HTMLResponse:
-    if is_admin_site(request):
-        return admin_root_login_get(request)
     return _render_index(request)
 
 
@@ -433,11 +465,7 @@ def verify(
     csrf: str = Form(""),
     vulgo: str = Form(""),
     numeros: str = Form(""),
-    username: str = Form(""),
-    password: str = Form(""),
 ) -> HTMLResponse:
-    if is_admin_site(request):
-        return admin_root_login_post(request, csrf, username, password)
     assert engine is not None
     if csrf != request.session.get("csrf"):
         raise HTTPException(status_code=400, detail="Sessão expirada")
@@ -448,6 +476,7 @@ def verify(
         resultado = engine.check_many(numeros.splitlines(), record_new=True, vulgo=vulgo)
     except Exception as exc:
         return _render_index(request, entrada=numeros, vulgo=vulgo, erro=f"Falha ao acessar o banco: {exc}")
+    registrar_externo(numeros.splitlines(), vulgo, resultado, origem="site")
     return _render_index(request, entrada=numeros, vulgo=vulgo, resultado=resultado)
 
 
@@ -463,6 +492,7 @@ def verificar(request: Request, body: VerificarRequest) -> dict[str, Any]:
         resultado = engine.check_many(body.numeros.splitlines(), record_new=True, vulgo=vulgo)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Falha ao acessar o banco: {exc}") from exc
+    registrar_externo(body.numeros.splitlines(), vulgo, resultado, origem="site")
     agora = datetime.now(timezone.utc)
     try:
         stats = engine.stats()

@@ -459,6 +459,21 @@
         if (botao && !botao.disabled) { filtrar(botao.dataset.alvo); }
     });
 
+    var botaoCopiarTudo = $('copiar-tudo');
+    if (botaoCopiarTudo) {
+        var rotuloCopiar = botaoCopiarTudo.querySelector('span');
+        botaoCopiarTudo.addEventListener('click', function () {
+            if (!estado.lista.length || !navigator.clipboard) { return; }
+            var texto = estado.lista.map(textoCopia).join('\n');
+            navigator.clipboard.writeText(texto).then(function () {
+                var antes = rotuloCopiar.textContent;
+                rotuloCopiar.textContent = 'Copiado!';
+                botaoCopiarTudo.classList.add('feito');
+                setTimeout(function () { rotuloCopiar.textContent = antes; botaoCopiarTudo.classList.remove('feito'); }, 1400);
+            });
+        });
+    }
+
     resCorpo.addEventListener('click', function (ev) {
         var botao = ev.target.closest('.copiar');
         if (botao) {
