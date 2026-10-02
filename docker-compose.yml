@@ -29,6 +29,9 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER:-antiretest}:${POSTGRES_PASSWORD:-antiretest}@postgres:5432/${POSTGRES_DB:-antiretest}
       ANTIRETEST_LOG_DIR: /data/registros
       SESSION_SECRET: ${SESSION_SECRET:-change-me-in-production}
+      CX2_ADMIN_USER: ${CX2_ADMIN_USER:-}
+      CX2_ADMIN_PASSWORD_HASH: ${CX2_ADMIN_PASSWORD_HASH:-}
+      ADMIN_HOST: ${ADMIN_HOST:-}
     volumes:
       - anti-retest-data:/data
     expose:
@@ -78,6 +81,52 @@ services:
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-antiretest}:${POSTGRES_PASSWORD:-antiretest}@postgres:5432/${POSTGRES_DB:-antiretest}
     command: ["python", "/app/scripts/migrate_fp_cartao.py"]
+
+  import-txt:
+    profiles: ["import"]
+    image: anti-retest-api:latest
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-antiretest}:${POSTGRES_PASSWORD:-antiretest}@postgres:5432/${POSTGRES_DB:-antiretest}
+      IMPORT_BATCH: ${IMPORT_BATCH:-5000}
+    volumes:
+      - ./all:/import:ro
+    command: ["python", "/app/scripts/import_txt_to_postgres.py", "/import/1.txt", "/import/2.txt"]
+
+  import-txt-fast:
+    profiles: ["import"]
+    image: anti-retest-api:latest
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-antiretest}:${POSTGRES_PASSWORD:-antiretest}@postgres:5432/${POSTGRES_DB:-antiretest}
+      IMPORT_BATCH: ${IMPORT_BATCH:-50000}
+      IMPORT_READ_CHUNK: ${IMPORT_READ_CHUNK:-20000}
+      IMPORT_WORKERS: ${IMPORT_WORKERS:-4}
+      IMPORT_DROP_INDEXES: ${IMPORT_DROP_INDEXES:-1}
+    volumes:
+      - ./all:/import:ro
+    command: ["python", "/app/scripts/import_txt_to_postgres_fast.py", "/import/1.txt", "/import/2.txt"]
+
+  import-antrt:
+    profiles: ["import"]
+    image: anti-retest-api:latest
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-antiretest}:${POSTGRES_PASSWORD:-antiretest}@postgres:5432/${POSTGRES_DB:-antiretest}
+      IMPORT_BATCH: ${IMPORT_BATCH:-50000}
+      IMPORT_READ_CHUNK: ${IMPORT_READ_CHUNK:-20000}
+      IMPORT_WORKERS: ${IMPORT_WORKERS:-4}
+      IMPORT_DROP_INDEXES: ${IMPORT_DROP_INDEXES:-1}
+    volumes:
+      - ./antrt:/antrt:ro
+      - ./scripts/import_all_in_dir.sh:/scripts/import_all_in_dir.sh:ro
+    command: ["bash", "/scripts/import_all_in_dir.sh", "/antrt"]
 
 volumes:
   anti-retest-pg:

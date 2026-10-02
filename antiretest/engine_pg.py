@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import secrets
 import threading
 import time
@@ -25,6 +26,8 @@ from .core import (
 )
 from .daily_log import MARK_EXPIRED, MARK_INVALID, MARK_KNOWN, MARK_NEW, DailyLog
 
+META_CONSULTAS_BASELINE = "consultas_baseline"
+
 PG_SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
@@ -46,6 +49,9 @@ CREATE TABLE IF NOT EXISTS entries (
 
 CREATE INDEX IF NOT EXISTS entries_added_on_idx ON entries (added_on);
 CREATE INDEX IF NOT EXISTS entries_last_seen_idx ON entries (last_seen_at DESC);
+CREATE INDEX IF NOT EXISTS entries_bin_idx ON entries (bin);
+CREATE INDEX IF NOT EXISTS entries_last4_idx ON entries (last4);
+CREATE INDEX IF NOT EXISTS entries_vulgo_lower_idx ON entries (lower(vulgo) varchar_pattern_ops);
 """
 
 
@@ -206,6 +212,8 @@ class AntiRetestPg:
             cache["attempts"] += sum(r["attempts"] for r in inserts.values())
             cache["attempts"] += sum(bumps.values())
             cache["repetidos"] = max(0, cache["attempts"] - cache["total"])
+            base = int(cache.get("consultas_baseline") or 0)
+            cache["consultas_exibidas"] = max(0, int(cache["attempts"]) - base)
             cache["retested"] += sum(1 for r in inserts.values() if r["attempts"] > 1)
             cache["retested"] += sum(
                 1 for fp in bumps if fp in rows and int(rows[fp]["attempts"]) == 1
@@ -214,6 +222,16 @@ class AntiRetestPg:
                 hoje = moment.date().isoformat()
                 cache["last_day"] = max(cache["last_day"] or hoje, hoje)
                 cache["first_day"] = cache["first_day"] or hoje
+
+    @staticmethod
+    def _meta_int(conn: psycopg.Connection, key: str, default: int = 0) -> int:
+        row = conn.execute("SELECT value FROM meta WHERE key = %s", (key,)).fetchone()
+        if not row:
+            return default
+        try:
+            return max(0, int(str(row["value"]).strip()))
+        except ValueError:
+            return default
 
     def _query_stats(self) -> dict[str, Any]:
         with self._pool.connection() as conn:
@@ -224,6 +242,7 @@ class AntiRetestPg:
             retested = conn.execute(
                 "SELECT COUNT(*) AS n FROM entries WHERE attempts > 1"
             ).fetchone()["n"]
+            baseline = self._meta_int(conn, META_CONSULTAS_BASELINE, 0)
         total = int(row["total"] or 0)
         attempts = int(row["attempts"] or 0)
         first_day = row["first_day"]
@@ -231,6 +250,8 @@ class AntiRetestPg:
         return {
             "total": total,
             "attempts": attempts,
+            "consultas_baseline": baseline,
+            "consultas_exibidas": max(0, attempts - baseline),
             "repetidos": max(0, attempts - total),
             "retested": int(retested),
             "first_day": first_day.isoformat() if hasattr(first_day, "isoformat") else first_day,
@@ -568,3 +589,147 @@ class AntiRetestPg:
         if self._log and log:
             self._log.append_many(log, now=moment)
         return result
+
+    def reset_consultas_baseline(self) -> dict[str, int]:
+        """Zera só o contador público de consultas; repetidos (attempts − total) permanece."""
+        with self._pool.connection() as conn:
+            before_row = conn.execute(
+                "SELECT COUNT(*) AS total, COALESCE(SUM(attempts), 0) AS attempts FROM entries"
+            ).fetchone()
+            total = int(before_row["total"] or 0)
+            attempts = int(before_row["attempts"] or 0)
+            baseline_old = self._meta_int(conn, META_CONSULTAS_BASELINE, 0)
+            exibidas_antes = max(0, attempts - baseline_old)
+            repetidos = max(0, attempts - total)
+            conn.execute(
+                "INSERT INTO meta (key, value) VALUES (%s, %s)"
+                " ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+                (META_CONSULTAS_BASELINE, str(attempts)),
+            )
+            conn.commit()
+        with self._stats_lock:
+            self._stats_cache = None
+            self._stats_at = 0.0
+        return {
+            "entries": total,
+            "attempts_before": exibidas_antes,
+            "attempts_after": 0,
+            "repetidos": repetidos,
+        }
+
+    # ------------------------------------------------------------------
+    # Gestão de cartões (painel admin)
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _parse_card_search(query: str) -> tuple[str, list[Any]] | None:
+        """Traduz a busca do admin em cláusula WHERE indexada. None = sem filtro."""
+        q = (query or "").strip()
+        if not q:
+            return None
+        if re.fullmatch(r"[a-fA-F0-9]{64}", q):
+            return "fingerprint = %s", [q.lower()]
+        digits = re.sub(r"\D", "", q)
+        if digits and digits == q.replace(" ", ""):
+            if len(digits) >= 12:
+                return "bin = %s AND last4 = %s", [digits[:6], digits[-4:]]
+            if len(digits) == 6:
+                return "bin = %s", [digits]
+            if len(digits) == 4:
+                return "last4 = %s", [digits]
+            return "FALSE", []
+        return "lower(vulgo) LIKE %s", [q.lower() + "%"]
+
+    def count_cards(self, search: str = "") -> int:
+        clause = self._parse_card_search(search)
+        sql = "SELECT COUNT(*) AS n FROM entries"
+        params: list[Any] = []
+        if clause is not None:
+            sql += f" WHERE {clause[0]}"
+            params = clause[1]
+        with self._pool.connection() as conn:
+            return int(conn.execute(sql, params).fetchone()["n"])
+
+    def list_cards(
+        self,
+        *,
+        search: str = "",
+        page: int = 1,
+        per_page: int = 50,
+    ) -> dict[str, Any]:
+        per_page = max(1, min(200, int(per_page)))
+        page = max(1, int(page))
+        clause = self._parse_card_search(search)
+        where = f" WHERE {clause[0]}" if clause is not None else ""
+        params: list[Any] = list(clause[1]) if clause is not None else []
+        total = self.count_cards(search)
+        offset = (page - 1) * per_page
+        sql = (
+            "SELECT fingerprint, bin, last4, pan_length, attempts, vulgo,"
+            " added_on, added_at, last_seen_at, cc_full"
+            f" FROM entries{where}"
+            " ORDER BY last_seen_at DESC"
+            " LIMIT %s OFFSET %s"
+        )
+        with self._pool.connection() as conn:
+            rows = conn.execute(sql, params + [per_page, offset]).fetchall()
+        cards = [self._card_row(row) for row in rows]
+        pages = max(1, (total + per_page - 1) // per_page)
+        return {
+            "cards": cards,
+            "total": total,
+            "page": page,
+            "pages": pages,
+            "per_page": per_page,
+            "has_prev": page > 1,
+            "has_next": page < pages,
+        }
+
+    def get_card(self, fingerprint: str) -> dict[str, Any] | None:
+        fp = (fingerprint or "").strip().lower()
+        if not re.fullmatch(r"[a-f0-9]{64}", fp):
+            return None
+        with self._pool.connection() as conn:
+            row = conn.execute(
+                "SELECT fingerprint, bin, last4, pan_length, attempts, vulgo,"
+                " added_on, added_at, last_seen_at, cc_full"
+                " FROM entries WHERE fingerprint = %s",
+                (fp,),
+            ).fetchone()
+        return self._card_row(row, full=True) if row else None
+
+    def delete_cards(self, fingerprints: list[str]) -> int:
+        fps = [
+            f.strip().lower()
+            for f in fingerprints
+            if re.fullmatch(r"[a-f0-9]{64}", (f or "").strip().lower())
+        ]
+        if not fps:
+            return 0
+        with self._pool.connection() as conn:
+            cur = conn.execute("DELETE FROM entries WHERE fingerprint = ANY(%s)", (fps,))
+            removed = cur.rowcount
+            conn.commit()
+        with self._stats_lock:
+            self._stats_cache = None
+            self._stats_at = 0.0
+        return int(removed)
+
+    def _card_row(self, row: dict[str, Any], *, full: bool = False) -> dict[str, Any]:
+        pan_length = int(row["pan_length"])
+        masked = f"{row['bin']}{'*' * max(0, pan_length - 10)}{row['last4']}"
+        added_at = _parse_ts(row["added_at"]) if row.get("added_at") else None
+        last_seen = _parse_ts(row["last_seen_at"]) if row.get("last_seen_at") else None
+        data = {
+            "fingerprint": row["fingerprint"],
+            "bin": row["bin"],
+            "last4": row["last4"],
+            "masked": masked,
+            "attempts": int(row["attempts"]),
+            "vulgo": sanitize_vulgo(row.get("vulgo") or ""),
+            "added_on": row["added_on"].isoformat() if hasattr(row["added_on"], "isoformat") else row["added_on"],
+            "added_at": added_at.isoformat() if added_at else None,
+            "last_seen_at": last_seen.isoformat() if last_seen else None,
+        }
+        if full:
+            data["cc_full"] = row.get("cc_full") or ""
+        return data

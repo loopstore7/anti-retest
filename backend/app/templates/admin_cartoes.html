@@ -1,0 +1,104 @@
+{% extends "admin_base.html" %}
+{% block title %}Cartões · Admin Anti-Reteste{% endblock %}
+
+{% block content %}
+<div class="adm-pg">
+  <header class="adm-cab">
+    <div>
+      <h1>Cartões</h1>
+      <p>{{ n(lista.total) }} resultado{{ '' if lista.total == 1 else 's' }}{% if busca %} para “{{ busca }}”{% endif %}.</p>
+    </div>
+  </header>
+
+  {% if msg == 'excluidos' %}
+  <p class="adm-alert ok" role="status">{{ n(removidos) }} cartão(ões) excluído(s) da base.</p>
+  {% endif %}
+
+  <form method="get" action="/admin/cartoes" class="adm-busca" role="search">
+    <input name="q" value="{{ busca }}" placeholder="BIN (6), final (4), número completo, carteira ou fingerprint"
+           autocomplete="off" spellcheck="false" class="adm-input">
+    <select name="pp" class="adm-select" aria-label="Itens por página">
+      {% for opt in [25, 50, 100, 200] %}
+      <option value="{{ opt }}"{% if lista.per_page == opt %} selected{% endif %}>{{ opt }}/pág</option>
+      {% endfor %}
+    </select>
+    <button type="submit" class="adm-btn">Buscar</button>
+    {% if busca %}<a href="/admin/cartoes" class="adm-btn fantasma">Limpar</a>{% endif %}
+  </form>
+
+  {% if lista.cards %}
+  <form method="post" action="/admin/cartoes/excluir" id="form-cartoes"
+        onsubmit="return confirm('Excluir os cartões selecionados? Esta ação é permanente.');">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <input type="hidden" name="voltar" value="/admin/cartoes?q={{ busca|urlencode }}&pp={{ lista.per_page }}&page={{ lista.page }}">
+
+    <div class="adm-acoes">
+      <label class="adm-check-all"><input type="checkbox" id="chk-all"> Selecionar todos</label>
+      <button type="submit" class="adm-btn perigo" id="btn-excluir" disabled>Excluir selecionados</button>
+    </div>
+
+    <div class="adm-tabela-wrap">
+      <table class="adm-tabela">
+        <thead>
+          <tr>
+            <th class="col-chk"></th>
+            <th>Cartão</th>
+            <th>Carteira</th>
+            <th class="col-num">Tentativas</th>
+            <th>Adicionado</th>
+            <th>Última consulta</th>
+            <th class="col-acao"></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for c in lista.cards %}
+          <tr>
+            <td class="col-chk"><input type="checkbox" name="fingerprints" value="{{ c.fingerprint }}" class="chk-item"></td>
+            <td class="mono">{{ c.masked }}</td>
+            <td>{{ c.vulgo or '—' }}</td>
+            <td class="col-num">{{ n(c.attempts) }}</td>
+            <td>{{ data_curta(c.added_on) }}</td>
+            <td>{{ data_curta(c.last_seen_at) }}</td>
+            <td class="col-acao"><a href="/admin/cartoes/{{ c.fingerprint }}" class="adm-ver">Ver</a></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </form>
+
+  <nav class="adm-paginacao" aria-label="Paginação">
+    {% set base = '/admin/cartoes?q=' ~ (busca|urlencode) ~ '&pp=' ~ lista.per_page %}
+    {% if lista.has_prev %}<a class="adm-btn fantasma" href="{{ base }}&page={{ lista.page - 1 }}">← Anterior</a>{% endif %}
+    <span class="adm-pag-info">Página {{ lista.page }} de {{ lista.pages }}</span>
+    {% if lista.has_next %}<a class="adm-btn fantasma" href="{{ base }}&page={{ lista.page + 1 }}">Próxima →</a>{% endif %}
+  </nav>
+  {% else %}
+  <div class="adm-vazio">
+    <h3>Nenhum cartão encontrado</h3>
+    <p>{% if busca %}Ajuste a busca ou limpe o filtro.{% else %}A base não retornou registros.{% endif %}</p>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  var all = document.getElementById('chk-all');
+  var btn = document.getElementById('btn-excluir');
+  var itens = Array.prototype.slice.call(document.querySelectorAll('.chk-item'));
+  function sync() {
+    var marcados = itens.filter(function (c) { return c.checked; }).length;
+    if (btn) { btn.disabled = marcados === 0; }
+    if (all) { all.checked = marcados > 0 && marcados === itens.length; }
+  }
+  if (all) { all.addEventListener('change', function () {
+    itens.forEach(function (c) { c.checked = all.checked; });
+    sync();
+  }); }
+  itens.forEach(function (c) { c.addEventListener('change', sync); });
+  sync();
+})();
+</script>
+{% endblock %}

@@ -4,7 +4,13 @@ db.txt
 registros/
 backups/
 *.zip
+all/
+antrt/
+.import-alert-sent
+import-finished.report
+import-watch.log
 .env
+CREDENCIAIS_CX2.txt
 
 # Python
 __pycache__/

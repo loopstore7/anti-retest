@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, Form, HTTPException, Request
+from fastapi import APIRouter, FastAPI, Form, HTTPException, Request
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
@@ -20,6 +20,13 @@ from starlette.middleware.sessions import SessionMiddleware
 from antiretest.core import mask_vulgo, sanitize_vulgo
 from antiretest.engine_pg import AntiRetestPg
 
+from .admin_cx2 import (
+    admin_root_login_get,
+    admin_root_login_post,
+    install_admin_site_middleware,
+    is_admin_site,
+    register_cx2_routes,
+)
 from .schemas import CheckItem, CheckRequest, CheckResponse, StatsResponse, VerificarRequest
 
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
@@ -92,7 +99,7 @@ def build_stats_payload(stats: dict[str, Any] | None, agora: datetime) -> dict[s
         return None
     return {
         "total": int(stats["total"]),
-        "consultas": int(stats["attempts"]),
+        "consultas": int(stats.get("consultas_exibidas", stats["attempts"])),
         "repetidos": int(stats["repetidos"]),
         "ultimo": data_curta(stats.get("last_day")),
         "ultimo_nota": nota_ultimo_registro(stats, agora),
@@ -283,7 +290,7 @@ def _page_ctx(request: Request, **extra: Any) -> dict[str, Any]:
 
 def _stats_extras(stats: dict[str, Any] | None, agora: datetime) -> dict[str, Any]:
     return {
-        "exibe_consultas": int(stats["attempts"]) if stats else 0,
+        "exibe_consultas": int(stats.get("consultas_exibidas", stats["attempts"])) if stats else 0,
         "exibe_repetidos": int(stats["repetidos"]) if stats else 0,
         "nota_ultimo": nota_ultimo_registro(stats, agora),
         "agora_hora": agora.strftime("%H:%M"),
@@ -308,8 +315,19 @@ app = FastAPI(
 )
 app.add_middleware(SessionMiddleware, secret_key=os.environ.get("SESSION_SECRET", secrets.token_hex(32)))
 app.add_middleware(GZipMiddleware, minimum_size=1024)
+install_admin_site_middleware(app)
 if STATIC_DIR.is_dir():
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+_cx2 = APIRouter()
+register_cx2_routes(
+    _cx2,
+    TEMPLATES,
+    get_engine=lambda: engine,
+    page_ctx=_page_ctx,
+    n_fmt=n,
+)
+app.include_router(_cx2)
 
 
 @app.get("/health")
@@ -324,6 +342,7 @@ def api_stats() -> StatsResponse:
     return StatsResponse(
         total=int(raw["total"]),
         attempts=int(raw["attempts"]),
+        consultas=int(raw.get("consultas_exibidas", raw["attempts"])),
         repetidos=int(raw["repetidos"]),
         retested=int(raw["retested"]),
         first_day=str(raw["first_day"]) if raw.get("first_day") else None,
@@ -403,6 +422,8 @@ def _render_index(
 
 @app.get("/", response_class=HTMLResponse)
 def index(request: Request) -> HTMLResponse:
+    if is_admin_site(request):
+        return admin_root_login_get(request)
     return _render_index(request)
 
 
@@ -412,7 +433,11 @@ def verify(
     csrf: str = Form(""),
     vulgo: str = Form(""),
     numeros: str = Form(""),
+    username: str = Form(""),
+    password: str = Form(""),
 ) -> HTMLResponse:
+    if is_admin_site(request):
+        return admin_root_login_post(request, csrf, username, password)
     assert engine is not None
     if csrf != request.session.get("csrf"):
         raise HTTPException(status_code=400, detail="Sessão expirada")

@@ -46,6 +46,7 @@ class CheckResponse(BaseModel):
 class StatsResponse(BaseModel):
     total: int
     attempts: int
+    consultas: int = Field(..., description="Consultas exibidas no painel (attempts − baseline)")
     repetidos: int
     retested: int
     first_day: str | None

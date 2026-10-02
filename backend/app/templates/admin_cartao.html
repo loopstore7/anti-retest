@@ -1,0 +1,38 @@
+{% extends "admin_base.html" %}
+{% block title %}Cartão {{ card.masked }} · Admin{% endblock %}
+
+{% block content %}
+<div class="adm-pg adm-pg-estreita">
+  <header class="adm-cab">
+    <div>
+      <h1>Detalhe do cartão</h1>
+      <p><a href="/admin/cartoes" class="adm-voltar">← Voltar à lista</a></p>
+    </div>
+  </header>
+
+  <section class="adm-bloco">
+    <dl class="adm-def">
+      <div><dt>Cartão</dt><dd class="mono grande">{{ card.cc_full or card.masked }}</dd></div>
+      <div><dt>Mascarado</dt><dd class="mono">{{ card.masked }}</dd></div>
+      <div><dt>BIN</dt><dd class="mono">{{ card.bin }}</dd></div>
+      <div><dt>Final</dt><dd class="mono">{{ card.last4 }}</dd></div>
+      <div><dt>Carteira (vulgo)</dt><dd>{{ card.vulgo or '—' }}</dd></div>
+      <div><dt>Tentativas</dt><dd>{{ n(card.attempts) }}</dd></div>
+      <div><dt>Adicionado</dt><dd>{{ data_curta(card.added_on) }}</dd></div>
+      <div><dt>Última consulta</dt><dd>{{ data_curta(card.last_seen_at) }}</dd></div>
+      <div><dt>Fingerprint</dt><dd class="mono quebra">{{ card.fingerprint }}</dd></div>
+    </dl>
+  </section>
+
+  <section class="adm-bloco perigo-zona">
+    <h2>Excluir cartão</h2>
+    <p class="adm-mut">Remove permanentemente este registro da base anti-reteste.</p>
+    <form method="post" action="/admin/cartoes/excluir"
+          onsubmit="return confirm('Excluir este cartão da base? Esta ação é permanente.');">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <input type="hidden" name="fingerprints" value="{{ card.fingerprint }}">
+      <button type="submit" class="adm-btn perigo">Excluir cartão</button>
+    </form>
+  </section>
+</div>
+{% endblock %}
