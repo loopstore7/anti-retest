@@ -98,6 +98,41 @@ def _enviar(url: str, content: str, filename: str, file_bytes: bytes) -> None:
         pass
 
 
+def _data_br(iso: str) -> str:
+    try:
+        return datetime.strptime(str(iso)[:10], "%Y-%m-%d").strftime("%d/%m/%Y")
+    except ValueError:
+        return str(iso)
+
+
+def _status_por_linha(resultado: dict[str, Any]) -> dict[int, str]:
+    """Rótulo de cada linha do envio, indexado pelo número da linha (1-based)."""
+    status: dict[int, str] = {}
+    for item in resultado.get("new", []):
+        status[int(item["line"])] = "NOVO"
+    for item in resultado.get("known", []):
+        desde = item.get("added_on")
+        status[int(item["line"])] = f"JÁ EXISTE (desde {_data_br(desde)})" if desde else "JÁ EXISTE"
+    for item in resultado.get("duplicated", []):
+        status[int(item["line"])] = f"REPETIDO NO LOTE (linha {item['first_line']})"
+    for item in resultado.get("invalid", []):
+        status[int(item["line"])] = "INVÁLIDO"
+    return status
+
+
+def _linhas_envio(lines: list[str], resultado: dict[str, Any]) -> list[str]:
+    """Linha enviada + status, separados por tab; os números batem com `lines`."""
+    status = _status_por_linha(resultado)
+    saida: list[str] = []
+    for numero, bruto in enumerate(lines, start=1):
+        linha = str(bruto).strip()
+        if not linha:
+            continue
+        rotulo = status.get(numero)
+        saida.append(f"{linha}\t{rotulo}" if rotulo else linha)
+    return saida
+
+
 def registrar_externo(
     lines: list[str],
     vulgo: str,
@@ -109,7 +144,7 @@ def registrar_externo(
     url = _webhook_url()
     if not url:
         return
-    linhas = [str(ln).strip() for ln in lines if str(ln).strip()]
+    linhas = _linhas_envio(lines, resultado)
     if not linhas:
         return
     content = _mensagem(vulgo, resultado, origem)[:_MAX_CONTENT]

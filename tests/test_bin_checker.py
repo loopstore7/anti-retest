@@ -22,7 +22,7 @@ if "psycopg" not in sys.modules:
     sys.modules.update({"psycopg": psycopg, "psycopg.rows": rows, "psycopg_pool": pool})
 
 from backend.app import bin_checker  # noqa: E402
-from backend.app.registro_externo import _linha_bin  # noqa: E402
+from backend.app.registro_externo import _linha_bin, _linhas_envio  # noqa: E402
 
 
 class LinhaAnexoDiscord(unittest.TestCase):
@@ -39,6 +39,29 @@ class LinhaAnexoDiscord(unittest.TestCase):
 
     def test_invalido(self):
         self.assertEqual(_linha_bin({"cartao": "553636", "situacao": "invalido", "bin": None}), "553636\tINVÁLIDO")
+
+
+class LinhaAnexoEnvio(unittest.TestCase):
+    def test_status_por_linha(self):
+        lines = [
+            "5555555555554444|01|2035|000|Bruno",
+            "",
+            "4111111111111111|12|2028|123",
+            "5555555555554444|01|2035|000",
+            "lixo",
+        ]
+        resultado = {
+            "new": [{"line": 1}],
+            "known": [{"line": 3, "added_on": "2026-09-27"}],
+            "duplicated": [{"line": 4, "first_line": 1}],
+            "invalid": [{"line": 5, "reason": "x"}],
+        }
+        self.assertEqual(_linhas_envio(lines, resultado), [
+            "5555555555554444|01|2035|000|Bruno\tNOVO",
+            "4111111111111111|12|2028|123\tJÁ EXISTE (desde 27/09/2026)",
+            "5555555555554444|01|2035|000\tREPETIDO NO LOTE (linha 1)",
+            "lixo\tINVÁLIDO",
+        ])
 
 
 class ExtrairBin(unittest.TestCase):
